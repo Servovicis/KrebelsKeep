@@ -58,7 +58,7 @@ func _draw() -> void:
 
 
 func _zoom_camera(amount: float) -> void:
-	var next_zoom := clamp(camera.zoom.x + amount, MIN_ZOOM, MAX_ZOOM)
+	var next_zoom: float = clampf(camera.zoom.x + amount, MIN_ZOOM, MAX_ZOOM)
 	camera.zoom = Vector2(next_zoom, next_zoom)
 
 
