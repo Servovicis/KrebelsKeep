@@ -16,7 +16,8 @@ const COLOR_OVERLORD_ROOM := Color("795d9a")
 const COLOR_GRID_MAJOR := Color("3b4652")
 const COLOR_GRID_MINOR := Color("2b333c")
 const COLOR_DIG_TASK := Color("d6b24a", 0.55)
-const COLOR_DIG_TASK_BLOCKED := Color("b9514f", 0.65)
+const COLOR_DIG_TASK_WAITING := Color("b9514f", 0.65)
+const COLOR_DIG_TASK_ASSIGNED := Color("6fb7ff", 0.55)
 const COLOR_WORKER_IDLE := Color("7bd88f")
 const COLOR_WORKER_MOVING := Color("6fb7ff")
 const COLOR_WORKER_WORKING := Color("f4d35e")
@@ -171,7 +172,7 @@ func _draw() -> void:
 		if task.status == TaskStatus.COMPLETE or task.status == TaskStatus.CANCELED:
 			continue
 		var task_rect := Rect2(Vector2(task.target_tile * TILE_SIZE), Vector2(TILE_SIZE, TILE_SIZE))
-		var task_color := COLOR_DIG_TASK_BLOCKED if task.status == TaskStatus.BLOCKED else COLOR_DIG_TASK
+		var task_color := _get_dig_task_color(task)
 		draw_rect(task_rect.grow(-5.0), task_color, true)
 		draw_rect(task_rect.grow(-5.0), Color("f7e2a1"), false, 2.0)
 
@@ -263,14 +264,11 @@ func _update_workers(delta: float) -> void:
 
 func _assign_next_task(worker: Worker) -> void:
 	for task in dig_tasks:
-		if task.status != TaskStatus.PENDING:
+		if not _is_waiting_for_assignment(task):
 			continue
 
 		var assignment := _find_reachable_interaction(worker.tile_position, task.target_tile)
 		if not assignment.reachable:
-			if not _can_any_worker_reach_task(task.target_tile):
-				task.status = TaskStatus.BLOCKED
-				last_message = "Dig task %d blocked: no reachable interaction tile" % task.id
 			continue
 
 		task.interaction_tile = assignment.interaction_tile
@@ -279,6 +277,7 @@ func _assign_next_task(worker: Worker) -> void:
 		worker.task_id = task.id
 		worker.path = assignment.path
 		worker.state = WorkerState.WORKING if worker.path.is_empty() else WorkerState.MOVING_TO_TASK
+		last_message = "Dig task %d assigned to worker %d" % [task.id, worker.id]
 		return
 
 
@@ -310,6 +309,7 @@ func _update_worker_work(worker: Worker, delta: float) -> void:
 
 	if task.status == TaskStatus.ASSIGNED:
 		task.status = TaskStatus.IN_PROGRESS
+		last_message = "Dig task %d in progress" % task.id
 
 	task.work_done += delta
 	if task.work_done < task.work_required:
@@ -341,7 +341,10 @@ func _try_create_dig_task(tile_position: Vector2i) -> void:
 	next_task_id += 1
 	next_task_order += 1
 	dig_tasks.append(task)
-	last_message = "Queued dig task %d at %s" % [task.id, str(tile_position)]
+	if _can_any_worker_reach_task(tile_position):
+		last_message = "Queued dig task %d at %s" % [task.id, str(tile_position)]
+	else:
+		last_message = "Queued dig task %d at %s, waiting for access" % [task.id, str(tile_position)]
 	print(last_message)
 	_update_debug_label()
 	queue_redraw()
@@ -358,10 +361,6 @@ func _get_invalid_dig_reason(tile_position: Vector2i) -> String:
 		return "Invalid dig: target must be SolidRock"
 	if _has_active_dig_task(tile_position):
 		return "Invalid dig: tile already has a dig task"
-	if _get_cardinal_interaction_tiles(tile_position).is_empty():
-		return "Invalid dig: target is not cardinal-adjacent to Floor or Entrance"
-	if not _can_any_worker_reach_task(tile_position):
-		return "Invalid dig: no worker can reach an adjacent interaction tile"
 
 	return ""
 
@@ -370,11 +369,15 @@ func _has_active_dig_task(tile_position: Vector2i) -> bool:
 	for task in dig_tasks:
 		if task.target_tile != tile_position:
 			continue
-		if task.status == TaskStatus.COMPLETE or task.status == TaskStatus.CANCELED or task.status == TaskStatus.BLOCKED:
+		if task.status == TaskStatus.COMPLETE or task.status == TaskStatus.CANCELED:
 			continue
 		return true
 
 	return false
+
+
+func _is_waiting_for_assignment(task: DigTask) -> bool:
+	return task.status == TaskStatus.PENDING or task.status == TaskStatus.BLOCKED
 
 
 func _can_any_worker_reach_task(target_tile: Vector2i) -> bool:
@@ -493,6 +496,15 @@ func _get_worker_color(state: WorkerState) -> Color:
 			return Color.MAGENTA
 
 
+func _get_dig_task_color(task: DigTask) -> Color:
+	if task.status == TaskStatus.ASSIGNED or task.status == TaskStatus.IN_PROGRESS:
+		return COLOR_DIG_TASK_ASSIGNED
+	if _is_waiting_for_assignment(task) and not _can_any_worker_reach_task(task.target_tile):
+		return COLOR_DIG_TASK_WAITING
+
+	return COLOR_DIG_TASK
+
+
 func _get_worker_state_name(state: WorkerState) -> String:
 	match state:
 		WorkerState.IDLE:
@@ -538,7 +550,7 @@ func _get_tool_name(tool: ToolMode) -> String:
 func _get_task_counts_text() -> String:
 	var counts: Dictionary = {}
 	for task in dig_tasks:
-		var status_name := _get_task_status_name(task.status)
+		var status_name := _get_debug_task_status_name(task)
 		counts[status_name] = int(counts.get(status_name, 0)) + 1
 
 	if counts.is_empty():
@@ -550,3 +562,12 @@ func _get_task_counts_text() -> String:
 		parts.append("%s %d" % [status_text, counts[status_text]])
 
 	return ", ".join(parts)
+
+
+func _get_debug_task_status_name(task: DigTask) -> String:
+	if _is_waiting_for_assignment(task):
+		if _can_any_worker_reach_task(task.target_tile):
+			return "Queued"
+		return "WaitingForAccess"
+
+	return _get_task_status_name(task.status)
