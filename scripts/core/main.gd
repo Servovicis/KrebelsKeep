@@ -56,7 +56,7 @@ func _ready() -> void:
 	access_valid = access_validator.is_overlord_room_connected(dungeon)
 	var access_message := "Access valid: Overlord room connected to outside" if access_valid else "Access invalid: Overlord room disconnected"
 
-	print("Krebel's Keep Milestone 1B loaded")
+	print("Krebel's Keep Milestone 1D loaded")
 	print(access_message)
 	_spawn_workers()
 	_update_debug_label()
@@ -90,6 +90,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("select") and active_tool == ToolMode.DIG:
 		_try_create_dig_task(_get_hovered_tile())
 	elif event.is_action_pressed("cancel"):
+		if active_tool == ToolMode.DIG and _try_cancel_dig_task(_get_hovered_tile()):
+			return
 		active_tool = ToolMode.SELECT
 		last_message = "Select tool active"
 		_update_debug_label()
@@ -177,7 +179,7 @@ func _update_debug_label() -> void:
 			"-" if worker.task_id == -1 else str(worker.task_id),
 		])
 
-	debug_label.text = "Krebel's Keep - Milestone 1B loaded\n%s\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
+	debug_label.text = "Krebel's Keep - Milestone 1D loaded\n%s\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
 		access_message,
 		_get_tool_name(active_tool),
 		hover_text,
@@ -276,6 +278,7 @@ func _update_worker_work(worker: RefCounted, delta: float) -> void:
 	access_valid = access_validator.is_overlord_room_connected(dungeon)
 	last_message = "Dig task %d complete at %s" % [task.id, str(task.target_tile)]
 	print("%s. Access valid: %s" % [last_message, str(access_valid)])
+	_reconsider_moving_worker_paths()
 	queue_redraw()
 
 
@@ -319,14 +322,62 @@ func _get_invalid_dig_reason(tile_position: Vector2i) -> String:
 
 
 func _has_active_dig_task(tile_position: Vector2i) -> bool:
+	return _get_active_dig_task_at(tile_position) != null
+
+
+func _get_active_dig_task_at(tile_position: Vector2i) -> RefCounted:
 	for task in dig_tasks:
 		if task.target_tile != tile_position:
 			continue
 		if task.status == DigTaskScript.TaskStatus.COMPLETE or task.status == DigTaskScript.TaskStatus.CANCELED:
 			continue
+		return task
+
+	return null
+
+
+func _try_cancel_dig_task(tile_position: Vector2i) -> bool:
+	if not dungeon.is_in_bounds(tile_position):
+		last_message = "No dig task to cancel"
+		print(last_message)
+		_update_debug_label()
 		return true
 
-	return false
+	var task := _get_active_dig_task_at(tile_position)
+	if task == null:
+		last_message = "No dig task to cancel at %s" % str(tile_position)
+		print(last_message)
+		_update_debug_label()
+		return true
+
+	if task.status == DigTaskScript.TaskStatus.IN_PROGRESS:
+		last_message = "Cannot cancel dig task %d currently in progress" % task.id
+		print(last_message)
+		_update_debug_label()
+		return true
+
+	if task.status == DigTaskScript.TaskStatus.ASSIGNED:
+		var assigned_worker := _get_worker_by_id(task.assigned_worker_id)
+		if assigned_worker != null:
+			if assigned_worker.state == WorkerAgentScript.WorkerState.WORKING:
+				last_message = "Cannot cancel dig task %d currently in progress" % task.id
+				print(last_message)
+				_update_debug_label()
+				return true
+
+			assigned_worker.task_id = -1
+			assigned_worker.path.clear()
+			assigned_worker.world_position = _tile_center(assigned_worker.tile_position)
+			assigned_worker.state = WorkerAgentScript.WorkerState.IDLE
+
+	task.status = DigTaskScript.TaskStatus.CANCELED
+	task.assigned_worker_id = -1
+	task.interaction_tile = Vector2i(-1, -1)
+	last_message = "Canceled dig task %d at %s" % [task.id, str(task.target_tile)]
+	print(last_message)
+	_update_debug_label()
+	queue_redraw()
+	return true
 
 
 func _is_waiting_for_assignment(task: RefCounted) -> bool:
@@ -352,6 +403,34 @@ func _get_task_by_id(task_id: int) -> RefCounted:
 			return task
 
 	return null
+
+
+func _get_worker_by_id(worker_id: int) -> RefCounted:
+	for worker in workers:
+		if worker.id == worker_id:
+			return worker
+
+	return null
+
+
+func _reconsider_moving_worker_paths() -> void:
+	for worker in workers:
+		if worker.state != WorkerAgentScript.WorkerState.MOVING_TO_TASK:
+			continue
+		if not worker.world_position.is_equal_approx(_tile_center(worker.tile_position)):
+			continue
+
+		var task := _get_task_by_id(worker.task_id)
+		if task == null or task.status != DigTaskScript.TaskStatus.ASSIGNED:
+			continue
+
+		var assignment := _find_reachable_interaction(worker.tile_position, task.target_tile)
+		if not assignment.reachable or assignment.path.size() >= worker.path.size():
+			continue
+
+		task.interaction_tile = assignment.interaction_tile
+		worker.path = assignment.path
+		print("Worker %d switched to shorter path for dig task %d" % [worker.id, task.id])
 
 
 func _get_hovered_tile() -> Vector2i:
