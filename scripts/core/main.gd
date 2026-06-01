@@ -2,6 +2,9 @@ extends Node2D
 
 const DungeonAccessValidatorScript := preload("res://scripts/core/dungeon_access_validator.gd")
 const DungeonMapScript := preload("res://scripts/core/dungeon_map.gd")
+const CardinalPathfinderScript := preload("res://scripts/core/cardinal_pathfinder.gd")
+const DigTaskScript := preload("res://scripts/core/dig_task.gd")
+const WorkerAgentScript := preload("res://scripts/core/worker_agent.gd")
 
 const TILE_SIZE := 32
 const CAMERA_SPEED := 600.0
@@ -22,12 +25,6 @@ const COLOR_WORKER_IDLE := Color("7bd88f")
 const COLOR_WORKER_MOVING := Color("6fb7ff")
 const COLOR_WORKER_WORKING := Color("f4d35e")
 const COLOR_WORKER_BLOCKED := Color("d95f5f")
-const CARDINAL_DIRECTIONS: Array[Vector2i] = [
-	Vector2i.UP,
-	Vector2i.RIGHT,
-	Vector2i.DOWN,
-	Vector2i.LEFT,
-]
 const WORKER_SPEED_TILES_PER_SECOND := 4.0
 const DIG_WORK_REQUIRED := 2.0
 
@@ -36,61 +33,16 @@ enum ToolMode {
 	DIG,
 }
 
-enum WorkerState {
-	IDLE,
-	MOVING_TO_TASK,
-	WORKING,
-	BLOCKED,
-}
-
-enum TaskType {
-	DIG_TILE,
-}
-
-enum TaskStatus {
-	PENDING,
-	ASSIGNED,
-	IN_PROGRESS,
-	COMPLETE,
-	BLOCKED,
-	CANCELED,
-}
-
-class DigTask:
-	var id := 0
-	var task_type: TaskType = TaskType.DIG_TILE
-	var target_tile := Vector2i.ZERO
-	var interaction_tile := Vector2i(-1, -1)
-	var status: TaskStatus = TaskStatus.PENDING
-	var assigned_worker_id := -1
-	var work_required := 2.0
-	var work_done := 0.0
-	var created_order := 0
-
-
-class Worker:
-	var id := 0
-	var tile_position := Vector2i.ZERO
-	var world_position := Vector2.ZERO
-	var state: WorkerState = WorkerState.IDLE
-	var path: Array[Vector2i] = []
-	var task_id := -1
-
-
-class TaskAssignment:
-	var reachable := false
-	var interaction_tile := Vector2i(-1, -1)
-	var path: Array[Vector2i] = []
-
 @onready var camera: Camera2D = $Camera2D
 @onready var debug_label: Label = $CanvasLayer/DebugLabel
 
 var dungeon: RefCounted
+var pathfinder: RefCounted
 var access_valid := false
 var debug_visible := true
 var active_tool: ToolMode = ToolMode.SELECT
-var workers: Array[Worker] = []
-var dig_tasks: Array[DigTask] = []
+var workers: Array[RefCounted] = []
+var dig_tasks: Array[RefCounted] = []
 var next_task_id := 1
 var next_task_order := 1
 var last_message := "Ready"
@@ -99,6 +51,7 @@ var last_message := "Ready"
 func _ready() -> void:
 	dungeon = DungeonMapScript.new()
 	dungeon.initialize_fixed_mvp()
+	pathfinder = CardinalPathfinderScript.new(dungeon)
 	var access_validator := DungeonAccessValidatorScript.new()
 	access_valid = access_validator.is_overlord_room_connected(dungeon)
 	var access_message := "Access valid: Overlord room connected to outside" if access_valid else "Access invalid: Overlord room disconnected"
@@ -169,7 +122,7 @@ func _draw() -> void:
 		draw_line(Vector2(0, y_pos), Vector2(map_size.x, y_pos), color, 1.0)
 
 	for task in dig_tasks:
-		if task.status == TaskStatus.COMPLETE or task.status == TaskStatus.CANCELED:
+		if task.status == DigTaskScript.TaskStatus.COMPLETE or task.status == DigTaskScript.TaskStatus.CANCELED:
 			continue
 		var task_rect := Rect2(Vector2(task.target_tile * TILE_SIZE), Vector2(TILE_SIZE, TILE_SIZE))
 		var task_color := _get_dig_task_color(task)
@@ -242,7 +195,7 @@ func _spawn_workers() -> void:
 
 	workers.clear()
 	for index in range(spawn_tiles.size()):
-		var worker := Worker.new()
+		var worker := WorkerAgentScript.new()
 		worker.id = index + 1
 		worker.tile_position = spawn_tiles[index]
 		worker.world_position = _tile_center(worker.tile_position)
@@ -252,17 +205,17 @@ func _spawn_workers() -> void:
 func _update_workers(delta: float) -> void:
 	for worker in workers:
 		match worker.state:
-			WorkerState.IDLE:
+			WorkerAgentScript.WorkerState.IDLE:
 				_assign_next_task(worker)
-			WorkerState.MOVING_TO_TASK:
+			WorkerAgentScript.WorkerState.MOVING_TO_TASK:
 				_update_worker_movement(worker, delta)
-			WorkerState.WORKING:
+			WorkerAgentScript.WorkerState.WORKING:
 				_update_worker_work(worker, delta)
-			WorkerState.BLOCKED:
+			WorkerAgentScript.WorkerState.BLOCKED:
 				_assign_next_task(worker)
 
 
-func _assign_next_task(worker: Worker) -> void:
+func _assign_next_task(worker: RefCounted) -> void:
 	for task in dig_tasks:
 		if not _is_waiting_for_assignment(task):
 			continue
@@ -272,21 +225,21 @@ func _assign_next_task(worker: Worker) -> void:
 			continue
 
 		task.interaction_tile = assignment.interaction_tile
-		task.status = TaskStatus.ASSIGNED
+		task.status = DigTaskScript.TaskStatus.ASSIGNED
 		task.assigned_worker_id = worker.id
 		worker.task_id = task.id
 		worker.path = assignment.path
-		worker.state = WorkerState.WORKING if worker.path.is_empty() else WorkerState.MOVING_TO_TASK
+		worker.state = WorkerAgentScript.WorkerState.WORKING if worker.path.is_empty() else WorkerAgentScript.WorkerState.MOVING_TO_TASK
 		last_message = "Dig task %d assigned to worker %d" % [task.id, worker.id]
 		return
 
 
-func _update_worker_movement(worker: Worker, delta: float) -> void:
+func _update_worker_movement(worker: RefCounted, delta: float) -> void:
 	if worker.path.is_empty():
-		worker.state = WorkerState.WORKING
+		worker.state = WorkerAgentScript.WorkerState.WORKING
 		return
 
-	var next_tile := worker.path[0]
+	var next_tile: Vector2i = worker.path[0]
 	var next_position := _tile_center(next_tile)
 	var max_distance := WORKER_SPEED_TILES_PER_SECOND * TILE_SIZE * delta
 	worker.world_position = worker.world_position.move_toward(next_position, max_distance)
@@ -295,20 +248,20 @@ func _update_worker_movement(worker: Worker, delta: float) -> void:
 		worker.tile_position = next_tile
 		worker.path.remove_at(0)
 		if worker.path.is_empty():
-			worker.state = WorkerState.WORKING
+			worker.state = WorkerAgentScript.WorkerState.WORKING
 
 	queue_redraw()
 
 
-func _update_worker_work(worker: Worker, delta: float) -> void:
+func _update_worker_work(worker: RefCounted, delta: float) -> void:
 	var task := _get_task_by_id(worker.task_id)
 	if task == null:
 		worker.task_id = -1
-		worker.state = WorkerState.IDLE
+		worker.state = WorkerAgentScript.WorkerState.IDLE
 		return
 
-	if task.status == TaskStatus.ASSIGNED:
-		task.status = TaskStatus.IN_PROGRESS
+	if task.status == DigTaskScript.TaskStatus.ASSIGNED:
+		task.status = DigTaskScript.TaskStatus.IN_PROGRESS
 		last_message = "Dig task %d in progress" % task.id
 
 	task.work_done += delta
@@ -316,9 +269,9 @@ func _update_worker_work(worker: Worker, delta: float) -> void:
 		return
 
 	dungeon.set_tile(task.target_tile, DungeonMapScript.TileType.FLOOR)
-	task.status = TaskStatus.COMPLETE
+	task.status = DigTaskScript.TaskStatus.COMPLETE
 	worker.task_id = -1
-	worker.state = WorkerState.IDLE
+	worker.state = WorkerAgentScript.WorkerState.IDLE
 	var access_validator := DungeonAccessValidatorScript.new()
 	access_valid = access_validator.is_overlord_room_connected(dungeon)
 	last_message = "Dig task %d complete at %s" % [task.id, str(task.target_tile)]
@@ -334,7 +287,7 @@ func _try_create_dig_task(tile_position: Vector2i) -> void:
 		_update_debug_label()
 		return
 
-	var task := DigTask.new()
+	var task := DigTaskScript.new()
 	task.id = next_task_id
 	task.target_tile = tile_position
 	task.created_order = next_task_order
@@ -369,15 +322,15 @@ func _has_active_dig_task(tile_position: Vector2i) -> bool:
 	for task in dig_tasks:
 		if task.target_tile != tile_position:
 			continue
-		if task.status == TaskStatus.COMPLETE or task.status == TaskStatus.CANCELED:
+		if task.status == DigTaskScript.TaskStatus.COMPLETE or task.status == DigTaskScript.TaskStatus.CANCELED:
 			continue
 		return true
 
 	return false
 
 
-func _is_waiting_for_assignment(task: DigTask) -> bool:
-	return task.status == TaskStatus.PENDING or task.status == TaskStatus.BLOCKED
+func _is_waiting_for_assignment(task: RefCounted) -> bool:
+	return task.status == DigTaskScript.TaskStatus.PENDING or task.status == DigTaskScript.TaskStatus.BLOCKED
 
 
 func _can_any_worker_reach_task(target_tile: Vector2i) -> bool:
@@ -389,79 +342,11 @@ func _can_any_worker_reach_task(target_tile: Vector2i) -> bool:
 	return false
 
 
-func _find_reachable_interaction(start_tile: Vector2i, target_tile: Vector2i) -> TaskAssignment:
-	for interaction_tile in _get_cardinal_interaction_tiles(target_tile):
-		if interaction_tile == start_tile:
-			var adjacent_assignment := TaskAssignment.new()
-			adjacent_assignment.reachable = true
-			adjacent_assignment.interaction_tile = interaction_tile
-			return adjacent_assignment
-
-		var path := _find_cardinal_path(start_tile, interaction_tile)
-		if not path.is_empty():
-			var path_assignment := TaskAssignment.new()
-			path_assignment.reachable = true
-			path_assignment.interaction_tile = interaction_tile
-			path_assignment.path = path
-			return path_assignment
-
-	return TaskAssignment.new()
+func _find_reachable_interaction(start_tile: Vector2i, target_tile: Vector2i) -> RefCounted:
+	return pathfinder.find_best_reachable_interaction(start_tile, target_tile)
 
 
-func _find_cardinal_path(start_tile: Vector2i, goal_tile: Vector2i) -> Array[Vector2i]:
-	var frontier: Array[Vector2i] = [start_tile]
-	var came_from: Dictionary = {}
-	var visited: Dictionary = {}
-	var cursor := 0
-	visited[start_tile] = true
-
-	while cursor < frontier.size():
-		var current := frontier[cursor]
-		cursor += 1
-		if current == goal_tile:
-			return _reconstruct_path(came_from, start_tile, goal_tile)
-
-		for direction in CARDINAL_DIRECTIONS:
-			var next_tile := current + direction
-			if visited.has(next_tile) or not _is_passable_tile(next_tile):
-				continue
-
-			visited[next_tile] = true
-			came_from[next_tile] = current
-			frontier.append(next_tile)
-
-	return []
-
-
-func _reconstruct_path(came_from: Dictionary, start_tile: Vector2i, goal_tile: Vector2i) -> Array[Vector2i]:
-	var path: Array[Vector2i] = []
-	var current := goal_tile
-	while current != start_tile:
-		path.push_front(current)
-		current = came_from[current]
-
-	return path
-
-
-func _get_cardinal_interaction_tiles(target_tile: Vector2i) -> Array[Vector2i]:
-	var interaction_tiles: Array[Vector2i] = []
-	for direction in CARDINAL_DIRECTIONS:
-		var neighbor := target_tile + direction
-		if _is_passable_tile(neighbor):
-			interaction_tiles.append(neighbor)
-
-	return interaction_tiles
-
-
-func _is_passable_tile(tile_position: Vector2i) -> bool:
-	if not dungeon.is_in_bounds(tile_position):
-		return false
-
-	var tile_type: int = dungeon.get_tile(tile_position)
-	return tile_type == DungeonMapScript.TileType.FLOOR or tile_type == DungeonMapScript.TileType.ENTRANCE
-
-
-func _get_task_by_id(task_id: int) -> DigTask:
+func _get_task_by_id(task_id: int) -> RefCounted:
 	for task in dig_tasks:
 		if task.id == task_id:
 			return task
@@ -482,22 +367,22 @@ func _tile_center(tile_position: Vector2i) -> Vector2:
 	return Vector2(tile_position * TILE_SIZE) + Vector2(TILE_SIZE * 0.5, TILE_SIZE * 0.5)
 
 
-func _get_worker_color(state: WorkerState) -> Color:
+func _get_worker_color(state: int) -> Color:
 	match state:
-		WorkerState.IDLE:
+		WorkerAgentScript.WorkerState.IDLE:
 			return COLOR_WORKER_IDLE
-		WorkerState.MOVING_TO_TASK:
+		WorkerAgentScript.WorkerState.MOVING_TO_TASK:
 			return COLOR_WORKER_MOVING
-		WorkerState.WORKING:
+		WorkerAgentScript.WorkerState.WORKING:
 			return COLOR_WORKER_WORKING
-		WorkerState.BLOCKED:
+		WorkerAgentScript.WorkerState.BLOCKED:
 			return COLOR_WORKER_BLOCKED
 		_:
 			return Color.MAGENTA
 
 
-func _get_dig_task_color(task: DigTask) -> Color:
-	if task.status == TaskStatus.ASSIGNED or task.status == TaskStatus.IN_PROGRESS:
+func _get_dig_task_color(task: RefCounted) -> Color:
+	if task.status == DigTaskScript.TaskStatus.ASSIGNED or task.status == DigTaskScript.TaskStatus.IN_PROGRESS:
 		return COLOR_DIG_TASK_ASSIGNED
 	if _is_waiting_for_assignment(task) and not _can_any_worker_reach_task(task.target_tile):
 		return COLOR_DIG_TASK_WAITING
@@ -505,33 +390,33 @@ func _get_dig_task_color(task: DigTask) -> Color:
 	return COLOR_DIG_TASK
 
 
-func _get_worker_state_name(state: WorkerState) -> String:
+func _get_worker_state_name(state: int) -> String:
 	match state:
-		WorkerState.IDLE:
+		WorkerAgentScript.WorkerState.IDLE:
 			return "Idle"
-		WorkerState.MOVING_TO_TASK:
+		WorkerAgentScript.WorkerState.MOVING_TO_TASK:
 			return "MovingToTask"
-		WorkerState.WORKING:
+		WorkerAgentScript.WorkerState.WORKING:
 			return "Working"
-		WorkerState.BLOCKED:
+		WorkerAgentScript.WorkerState.BLOCKED:
 			return "Blocked"
 		_:
 			return "Unknown"
 
 
-func _get_task_status_name(status: TaskStatus) -> String:
+func _get_task_status_name(status: int) -> String:
 	match status:
-		TaskStatus.PENDING:
+		DigTaskScript.TaskStatus.PENDING:
 			return "Pending"
-		TaskStatus.ASSIGNED:
+		DigTaskScript.TaskStatus.ASSIGNED:
 			return "Assigned"
-		TaskStatus.IN_PROGRESS:
+		DigTaskScript.TaskStatus.IN_PROGRESS:
 			return "InProgress"
-		TaskStatus.COMPLETE:
+		DigTaskScript.TaskStatus.COMPLETE:
 			return "Complete"
-		TaskStatus.BLOCKED:
+		DigTaskScript.TaskStatus.BLOCKED:
 			return "Blocked"
-		TaskStatus.CANCELED:
+		DigTaskScript.TaskStatus.CANCELED:
 			return "Canceled"
 		_:
 			return "Unknown"
@@ -564,7 +449,7 @@ func _get_task_counts_text() -> String:
 	return ", ".join(parts)
 
 
-func _get_debug_task_status_name(task: DigTask) -> String:
+func _get_debug_task_status_name(task: RefCounted) -> String:
 	if _is_waiting_for_assignment(task):
 		if _can_any_worker_reach_task(task.target_tile):
 			return "Queued"
