@@ -2,7 +2,7 @@
 
 Krebel's Keep is a 2D top-down tile-based dungeon builder/defense sim prototype.
 
-## Milestone 0 Workspace
+## Milestone 1A Dungeon Model Bootstrap
 
 - Godot version: 4.6.3
 - Language: GDScript
@@ -17,14 +17,17 @@ Krebel's Keep is a 2D top-down tile-based dungeon builder/defense sim prototype.
 
 ## Validation
 
-Milestone 0 is valid when:
+Milestone 1A is valid when:
 
 - The project opens in Godot 4.6.3.
 - The main scene runs.
-- A placeholder 128x128 grid is visible.
-- The debug label says `Krebel's Keep - Milestone 0 loaded`.
+- A fixed 128x128 dungeon grid is visible.
+- Solid rock, floor, boundary wall, entrance, and Overlord room tiles are visually distinct.
+- The entrance is near the south-center edge and connects by cardinal floor path to the north-center 5x5 Overlord room.
+- The debug label says `Krebel's Keep - Milestone 1A loaded` and shows the hovered tile coordinate/type.
 - Camera movement works with WASD or arrow keys.
 - Zoom works with mouse wheel or `+` and `-`.
-- No gameplay systems beyond the workspace shell are implemented.
+- Startup output reports `Access valid: Overlord room connected to outside`.
+- No workers, digging, resources, buildings, doors, traps, adventurers, combat, waves, tech tree, or save/load behavior exists yet.
 
-Milestone 1 will implement the first diggable dungeon prototype.
+Milestone 1B will implement worker digging on top of this dungeon model.

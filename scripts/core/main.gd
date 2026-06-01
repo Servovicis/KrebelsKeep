@@ -1,20 +1,39 @@
 extends Node2D
 
+const DungeonAccessValidatorScript := preload("res://scripts/core/dungeon_access_validator.gd")
+const DungeonMapScript := preload("res://scripts/core/dungeon_map.gd")
+
 const TILE_SIZE := 32
-const MAP_TILES := Vector2i(128, 128)
 const CAMERA_SPEED := 600.0
 const ZOOM_STEP := 0.1
 const MIN_ZOOM := 0.5
 const MAX_ZOOM := 2.0
+const COLOR_SOLID_ROCK := Color("20242a")
+const COLOR_FLOOR := Color("4b5966")
+const COLOR_BOUNDARY_WALL := Color("11151a")
+const COLOR_ENTRANCE := Color("c58b3d")
+const COLOR_OVERLORD_ROOM := Color("795d9a")
+const COLOR_GRID_MAJOR := Color("3b4652")
+const COLOR_GRID_MINOR := Color("2b333c")
 
 @onready var camera: Camera2D = $Camera2D
 @onready var debug_label: Label = $CanvasLayer/DebugLabel
 
+var dungeon: RefCounted
+var access_valid := false
 var debug_visible := true
 
 
 func _ready() -> void:
-	print("Krebel's Keep Milestone 0 loaded")
+	dungeon = DungeonMapScript.new()
+	dungeon.initialize_fixed_mvp()
+	var access_validator := DungeonAccessValidatorScript.new()
+	access_valid = access_validator.is_overlord_room_connected(dungeon)
+	var access_message := "Access valid: Overlord room connected to outside" if access_valid else "Access invalid: Overlord room disconnected"
+
+	print("Krebel's Keep Milestone 1A loaded")
+	print(access_message)
+	_update_debug_label()
 	queue_redraw()
 
 
@@ -29,6 +48,8 @@ func _process(delta: float) -> void:
 	if move_direction != Vector2.ZERO:
 		camera.position += move_direction * CAMERA_SPEED * delta / camera.zoom.x
 
+	_update_debug_label()
+
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("camera_zoom_in"):
@@ -41,20 +62,27 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _draw() -> void:
-	var map_size := Vector2(MAP_TILES * TILE_SIZE)
-	draw_rect(Rect2(Vector2.ZERO, map_size), Color("20242a"), true)
+	if dungeon == null:
+		return
 
-	for x in range(MAP_TILES.x + 1):
+	var map_size := Vector2(dungeon.size * TILE_SIZE)
+	draw_rect(Rect2(Vector2.ZERO, map_size), COLOR_SOLID_ROCK, true)
+
+	for y in range(dungeon.size.y):
+		for x in range(dungeon.size.x):
+			var tile_position := Vector2i(x, y)
+			var tile_rect := Rect2(Vector2(tile_position * TILE_SIZE), Vector2(TILE_SIZE, TILE_SIZE))
+			draw_rect(tile_rect, _get_tile_color(tile_position), true)
+
+	for x in range(dungeon.size.x + 1):
 		var x_pos := x * TILE_SIZE
-		var color := Color("3b4652") if x % 8 == 0 else Color("2b333c")
+		var color := COLOR_GRID_MAJOR if x % 8 == 0 else COLOR_GRID_MINOR
 		draw_line(Vector2(x_pos, 0), Vector2(x_pos, map_size.y), color, 1.0)
 
-	for y in range(MAP_TILES.y + 1):
+	for y in range(dungeon.size.y + 1):
 		var y_pos := y * TILE_SIZE
-		var color := Color("3b4652") if y % 8 == 0 else Color("2b333c")
+		var color := COLOR_GRID_MAJOR if y % 8 == 0 else COLOR_GRID_MINOR
 		draw_line(Vector2(0, y_pos), Vector2(map_size.x, y_pos), color, 1.0)
-
-	_draw_start_markers()
 
 
 func _zoom_camera(amount: float) -> void:
@@ -62,11 +90,31 @@ func _zoom_camera(amount: float) -> void:
 	camera.zoom = Vector2(next_zoom, next_zoom)
 
 
-func _draw_start_markers() -> void:
-	var start_area := Rect2(Vector2(61, 61) * TILE_SIZE, Vector2(5, 5) * TILE_SIZE)
-	var entrance := Rect2(Vector2(62, 123) * TILE_SIZE, Vector2(4, 2) * TILE_SIZE)
-	var overlord_room := Rect2(Vector2(60, 10) * TILE_SIZE, Vector2(8, 6) * TILE_SIZE)
+func _get_tile_color(tile_position: Vector2i) -> Color:
+	if dungeon.is_overlord_room(tile_position):
+		return COLOR_OVERLORD_ROOM
 
-	draw_rect(start_area, Color("5f7f57", 0.45), true)
-	draw_rect(entrance, Color("7f6a45", 0.45), true)
-	draw_rect(overlord_room, Color("66517a", 0.45), true)
+	match dungeon.get_tile(tile_position):
+		DungeonMapScript.TileType.SOLID_ROCK:
+			return COLOR_SOLID_ROCK
+		DungeonMapScript.TileType.FLOOR:
+			return COLOR_FLOOR
+		DungeonMapScript.TileType.BOUNDARY_WALL:
+			return COLOR_BOUNDARY_WALL
+		DungeonMapScript.TileType.ENTRANCE:
+			return COLOR_ENTRANCE
+		_:
+			return Color.MAGENTA
+
+
+func _update_debug_label() -> void:
+	if dungeon == null:
+		return
+
+	var mouse_tile := Vector2i(floori(get_global_mouse_position().x / TILE_SIZE), floori(get_global_mouse_position().y / TILE_SIZE))
+	var access_message := "Access valid: Overlord room connected to outside" if access_valid else "Access invalid: Overlord room disconnected"
+	debug_label.text = "Krebel's Keep - Milestone 1A loaded\n%s\nTile %s: %s" % [
+		access_message,
+		str(mouse_tile),
+		dungeon.get_tile_display_name(mouse_tile),
+	]
