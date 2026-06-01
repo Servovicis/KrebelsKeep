@@ -1,0 +1,20 @@
+[gd_scene load_steps=2 format=3 uid="uid://clyq0k8rbu5bn"]
+
+[ext_resource type="Script" path="res://scripts/core/main.gd" id="1_8h58f"]
+
+[node name="Main" type="Node2D"]
+script = ExtResource("1_8h58f")
+
+[node name="Camera2D" type="Camera2D" parent="."]
+position = Vector2(2048, 2048)
+zoom = Vector2(0.75, 0.75)
+enabled = true
+
+[node name="CanvasLayer" type="CanvasLayer" parent="."]
+
+[node name="DebugLabel" type="Label" parent="CanvasLayer"]
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 428.0
+offset_bottom = 72.0
+text = "Krebel's Keep - Milestone 0 loaded"
