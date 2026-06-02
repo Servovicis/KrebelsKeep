@@ -21,3 +21,4 @@ var work_required := 3.0
 var work_done := 0.0
 var created_order := 0
 var building_type: BuildingDefinitionScript.BuildingType = BuildingDefinitionScript.BuildingType.BARRACKS_PLACEHOLDER
+var completion_waiting_for_clear := false

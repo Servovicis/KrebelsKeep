@@ -286,6 +286,10 @@ func _assign_next_task(worker: RefCounted) -> void:
 		if not _is_waiting_for_assignment(task):
 			continue
 
+		var worker_on_construction_target := _get_worker_at_construction_target(task)
+		if worker_on_construction_target != null and worker_on_construction_target.id != worker.id:
+			continue
+
 		var assignment := _find_reachable_interaction(worker.tile_position, task.target_tile)
 		if not assignment.reachable:
 			continue
@@ -350,6 +354,16 @@ func _update_worker_work(worker: RefCounted, delta: float) -> void:
 		return
 
 	if _is_construction_task(task):
+		if _has_worker_at(task.target_tile):
+			if not task.completion_waiting_for_clear:
+				task.completion_waiting_for_clear = true
+				last_message = "Build task %d waiting for worker to clear %s" % [task.id, str(task.target_tile)]
+				print(last_message)
+				_update_debug_label()
+				queue_redraw()
+			return
+
+		task.completion_waiting_for_clear = false
 		buildings[task.target_tile] = task.building_type
 		_register_production_building(task.target_tile, task.building_type)
 	else:
@@ -506,8 +520,6 @@ func _get_invalid_build_reason(tile_position: Vector2i, definition: RefCounted) 
 		return "Invalid build: tile already has a construction task"
 	if _has_building_at(tile_position):
 		return "Invalid build: tile already has a building"
-	if _has_worker_at(tile_position):
-		return "Invalid build: tile occupied by worker"
 	if not resource_manager.can_afford(definition.cost):
 		return "Invalid build: insufficient resources for %s" % definition.display_name
 
@@ -545,11 +557,22 @@ func _has_building_at(tile_position: Vector2i) -> bool:
 
 
 func _has_worker_at(tile_position: Vector2i) -> bool:
+	return _get_worker_at(tile_position) != null
+
+
+func _get_worker_at(tile_position: Vector2i) -> RefCounted:
 	for worker in workers:
 		if worker.tile_position == tile_position:
-			return true
+			return worker
 
-	return false
+	return null
+
+
+func _get_worker_at_construction_target(task: RefCounted) -> RefCounted:
+	if not _is_construction_task(task):
+		return null
+
+	return _get_worker_at(task.target_tile)
 
 
 func _try_cancel_dig_task(tile_position: Vector2i) -> bool:
