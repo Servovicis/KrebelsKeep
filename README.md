@@ -2,7 +2,7 @@
 
 Krebel's Keep is a 2D top-down tile-based dungeon builder/defense sim prototype.
 
-## Milestone 2H Regenerating Source Capacity
+## Milestone 2I Worker Priority UX Stub
 
 - Godot version: 4.6.3
 - Language: GDScript
@@ -17,7 +17,7 @@ Krebel's Keep is a 2D top-down tile-based dungeon builder/defense sim prototype.
 
 ## Resource Extraction And Recruitment Prototype
 
-Milestone 2H keeps the worker trip prototype and lets Mine/Lumberyard extractors
+Milestone 2I keeps the worker trip prototype and lets Mine/Lumberyard extractors
 use reachable nearby permanent sources instead of requiring direct adjacency.
 Completed extractor buildings request harvest work from the shortest reachable
 matching source within a small cardinal path range. A worker travels to the
@@ -49,18 +49,25 @@ currently requires a completed `BarracksPlaceholder`, costs 20 Wood and 10 Ore,
 and spawns the worker on a valid reachable floor tile near the Barracks. This is
 a temporary worker-capacity stub before worker assignment UI.
 
-Worker assignment UI and building removal are future work.
+Press `P` to cycle the temporary global worker focus mode through Balanced,
+Digging, Building, and Harvesting. Focus mode biases idle workers toward that
+kind of eligible task, then falls back to other eligible work when the preferred
+task type is unavailable. This is a debug/HUD-first priority stub, not
+per-worker or per-building assignment UI.
+
+Full worker assignment UI, per-building assignment UI, and building removal are
+future work.
 
 ## Validation
 
-Milestone 2H is valid when:
+Milestone 2I is valid when:
 
 - The project opens in Godot 4.6.3.
 - The main scene runs.
 - A fixed 128x128 dungeon grid is visible.
 - Solid rock, floor, boundary wall, entrance, and Overlord room tiles are visually distinct.
 - The entrance is near the south-center edge and connects by cardinal floor path to the north-center 5x5 Overlord room.
-- The debug label says `Krebel's Keep Milestone 2H loaded` and shows the hovered tile coordinate/type.
+- The debug label says `Krebel's Keep Milestone 2I loaded` and shows the hovered tile coordinate/type.
 - Hovering a source shows its current/max availability, such as `Exposed Ore Source: 3/5 available`.
 - Camera movement works with WASD or arrow keys.
 - Zoom works with mouse wheel or `+` and `-`.
@@ -73,7 +80,9 @@ Milestone 2H is valid when:
 - Blocking source access stalls extractor production clearly instead of producing without a route.
 - Pressing `R` before a completed `BarracksPlaceholder` exists rejects recruitment clearly.
 - Pressing `R` with a completed `BarracksPlaceholder`, enough resources, and a valid reachable spawn tile deducts 20 Wood and 10 Ore and adds a worker.
-- The debug label shows worker count, recruitment cost, and the latest recruitment result.
+- The debug label shows worker count, worker status counts, worker focus mode, recruitment cost, and the latest recruitment result.
+- Pressing `P` cycles worker focus through Balanced, Digging, Building, and Harvesting.
+- Worker focus makes idle workers prefer eligible tasks of that type without preventing fallback to other eligible work.
 - Ore and Root source tiles remain visible, open, permanent, and regenerating.
 - No worker assignment UI, general hauling, finite source depletion, doors, traps, adventurers, combat, waves, tech tree, or save/load behavior exists yet.
 

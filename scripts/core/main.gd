@@ -58,6 +58,7 @@ const CARDINAL_DIRECTIONS: Array[Vector2i] = [
 	Vector2i.DOWN,
 	Vector2i.LEFT,
 ]
+const WORKER_FOCUS_COUNT := 4
 
 enum ToolMode {
 	SELECT,
@@ -66,6 +67,13 @@ enum ToolMode {
 	BUILD_WORKSHOP,
 	BUILD_LUMBERYARD,
 	BUILD_MINE,
+}
+
+enum WorkerFocus {
+	BALANCED,
+	DIGGING,
+	BUILDING,
+	HARVESTING,
 }
 
 @onready var camera: Camera2D = $Camera2D
@@ -77,6 +85,7 @@ var resource_manager: RefCounted
 var access_valid := false
 var debug_visible := true
 var active_tool: ToolMode = ToolMode.SELECT
+var worker_focus: WorkerFocus = WorkerFocus.BALANCED
 var workers: Array[RefCounted] = []
 var dig_tasks: Array[RefCounted] = []
 var construction_tasks: Array[RefCounted] = []
@@ -97,7 +106,7 @@ func _ready() -> void:
 	access_valid = access_validator.is_overlord_room_connected(dungeon)
 	var access_message := "Access valid: Overlord room connected to outside" if access_valid else "Access invalid: Overlord room disconnected"
 
-	print("Krebel's Keep Milestone 2H loaded")
+	print("Krebel's Keep Milestone 2I loaded")
 	print(access_message)
 	_spawn_workers()
 	_update_debug_label()
@@ -148,6 +157,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_update_debug_label()
 	elif event.is_action_pressed("recruit_worker"):
 		_try_recruit_worker()
+	elif event.is_action_pressed("cycle_worker_focus"):
+		_cycle_worker_focus()
 	elif event.is_action_pressed("select"):
 		match active_tool:
 			ToolMode.DIG:
@@ -291,15 +302,17 @@ func _update_debug_label() -> void:
 			worker_task_text = "%s %d" % [_get_task_action_name(worker_task), worker_task.id]
 		worker_lines.append("Worker %d: %s tile %s task %s" % [
 			worker.id,
-			_get_worker_state_name(worker.state),
+			_get_worker_state_name(worker),
 			str(worker.tile_position),
 			worker_task_text,
 		])
 
-	debug_label.text = "Krebel's Keep Milestone 2H loaded\n%s\nResources: %s\nWorkers: %d\nRecruit: R (%s)\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
+	debug_label.text = "Krebel's Keep Milestone 2I loaded\n%s\nResources: %s\nWorkers: %d\nWorker focus: %s (P)\nWorker economy: %s\nRecruit: R (%s)\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
 		access_message,
 		resource_manager.get_debug_text(),
 		workers.size(),
+		_get_worker_focus_name(worker_focus),
+		_get_worker_economy_text(),
 		_get_cost_debug_text(RECRUIT_WORKER_COST),
 		_get_tool_name(active_tool),
 		hover_text,
@@ -358,6 +371,13 @@ func _try_recruit_worker() -> void:
 	print(last_message)
 	_update_debug_label()
 	queue_redraw()
+
+
+func _cycle_worker_focus() -> void:
+	worker_focus = (int(worker_focus) + 1) % WORKER_FOCUS_COUNT
+	last_message = "Worker focus: %s" % _get_worker_focus_name(worker_focus)
+	print(last_message)
+	_update_debug_label()
 
 
 func _update_workers(delta: float) -> void:
@@ -1101,8 +1121,10 @@ func _get_assignable_tasks() -> Array[RefCounted]:
 		tasks.append(task)
 
 	tasks.sort_custom(func(a: RefCounted, b: RefCounted) -> bool:
-		if _get_task_priority(a) != _get_task_priority(b):
-			return _get_task_priority(a) < _get_task_priority(b)
+		var a_priority := _get_task_priority(a)
+		var b_priority := _get_task_priority(b)
+		if a_priority != b_priority:
+			return a_priority < b_priority
 		return a.created_order < b.created_order
 	)
 	return tasks
@@ -1207,20 +1229,26 @@ func _get_dig_task_color(task: RefCounted) -> Color:
 	return COLOR_DIG_TASK
 
 
-func _get_worker_state_name(state: int) -> String:
-	match state:
+func _get_worker_state_name(worker: RefCounted) -> String:
+	match worker.state:
 		WorkerAgentScript.WorkerState.IDLE:
 			return "Idle"
 		WorkerAgentScript.WorkerState.MOVING_TO_TASK:
-			return "MovingToTask"
+			var moving_task := _get_task_by_id(worker.task_id)
+			if _is_construction_task(moving_task):
+				return "Moving to build"
+			return "Moving to dig"
 		WorkerAgentScript.WorkerState.WORKING:
-			return "Working"
+			var working_task := _get_task_by_id(worker.task_id)
+			if _is_construction_task(working_task):
+				return "Constructing"
+			return "Digging"
 		WorkerAgentScript.WorkerState.MOVING_TO_SOURCE:
-			return "MovingToSource"
+			return "Moving to source"
 		WorkerAgentScript.WorkerState.GATHERING:
 			return "Gathering"
 		WorkerAgentScript.WorkerState.RETURNING_TO_BUILDING:
-			return "Returning"
+			return "Returning resource"
 		WorkerAgentScript.WorkerState.DEPOSITING:
 			return "Depositing"
 		WorkerAgentScript.WorkerState.BLOCKED:
@@ -1263,6 +1291,67 @@ func _get_tool_name(tool: ToolMode) -> String:
 			return "Build Mine"
 		_:
 			return "Unknown"
+
+
+func _get_worker_focus_name(focus: WorkerFocus) -> String:
+	match focus:
+		WorkerFocus.BALANCED:
+			return "Balanced"
+		WorkerFocus.DIGGING:
+			return "Digging"
+		WorkerFocus.BUILDING:
+			return "Building"
+		WorkerFocus.HARVESTING:
+			return "Harvesting"
+		_:
+			return "Unknown"
+
+
+func _get_worker_economy_text() -> String:
+	var idle_count := 0
+	var digging_count := 0
+	var constructing_count := 0
+	var harvesting_count := 0
+	for worker in workers:
+		if worker.state == WorkerAgentScript.WorkerState.IDLE:
+			idle_count += 1
+			continue
+
+		var task := _get_task_by_id(worker.task_id)
+		if _is_harvest_task(task):
+			harvesting_count += 1
+		elif _is_construction_task(task):
+			constructing_count += 1
+		elif task != null:
+			digging_count += 1
+
+	return "idle %d, digging %d, constructing %d, harvesting %d, pending dig %d, pending build %d, active harvest %d" % [
+		idle_count,
+		digging_count,
+		constructing_count,
+		harvesting_count,
+		_get_pending_task_count(dig_tasks),
+		_get_pending_task_count(construction_tasks),
+		_get_active_task_count(harvest_tasks),
+	]
+
+
+func _get_pending_task_count(tasks: Array[RefCounted]) -> int:
+	var count := 0
+	for task in tasks:
+		if _is_waiting_for_assignment(task):
+			count += 1
+
+	return count
+
+
+func _get_active_task_count(tasks: Array[RefCounted]) -> int:
+	var count := 0
+	for task in tasks:
+		if not _is_finished_task(task):
+			count += 1
+
+	return count
 
 
 func _get_task_counts_text() -> String:
@@ -1315,8 +1404,28 @@ func _is_finished_task(task: RefCounted) -> bool:
 
 
 func _get_task_priority(task: RefCounted) -> int:
-	if _is_harvest_task(task):
-		return 1
+	match worker_focus:
+		WorkerFocus.DIGGING:
+			if _is_construction_task(task):
+				return 1
+			if _is_harvest_task(task):
+				return 2
+			return 0
+		WorkerFocus.BUILDING:
+			if _is_construction_task(task):
+				return 0
+			if _is_harvest_task(task):
+				return 2
+			return 1
+		WorkerFocus.HARVESTING:
+			if _is_harvest_task(task):
+				return 0
+			if _is_construction_task(task):
+				return 2
+			return 1
+		_:
+			if _is_harvest_task(task):
+				return 1
 
 	return 0
 
