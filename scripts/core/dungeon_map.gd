@@ -21,6 +21,9 @@ const OVERLORD_ROOM := Rect2i(62, 10, 5, 5)
 
 var size := Vector2i(WIDTH, HEIGHT)
 var tiles: Array[int] = []
+# These are permanent regenerating resource sources, despite the temporary
+# "node" API name. Future milestones should add current/max output and
+# regeneration rates instead of finite depletion.
 var resource_nodes: Array[int] = []
 var entrance_tiles: Array[Vector2i] = []
 var overlord_room: Rect2i = OVERLORD_ROOM
@@ -91,9 +94,9 @@ func get_tile_display_name(position: Vector2i) -> String:
 func get_resource_node_display_name(position: Vector2i) -> String:
 	match get_resource_node(position):
 		ResourceNodeType.ORE:
-			return "OreNode"
+			return "Exposed Ore Source"
 		ResourceNodeType.ROOT:
-			return "RootNode"
+			return "Exposed Root Source"
 		_:
 			return ""
 
@@ -141,11 +144,17 @@ func _carve_cardinal_path(start: Vector2i, target: Vector2i) -> void:
 
 
 func _place_fixed_resource_nodes() -> void:
+	# Milestone 2D exposes fixed test sources on floor so Mine/Lumberyard
+	# placement and prototype production are easy to validate. Later sources
+	# should usually be reached or exposed by digging instead of all starting
+	# pre-dug.
 	_carve_cardinal_path(Vector2i(64, 92), Vector2i(60, 92))
 	_carve_cardinal_path(Vector2i(64, 84), Vector2i(59, 84))
 	_carve_cardinal_path(Vector2i(64, 70), Vector2i(68, 70))
 	_carve_cardinal_path(Vector2i(64, 62), Vector2i(69, 62))
 
+	# Sources are permanent. Roots regrow through dungeon magic; ore-rich
+	# sources replenish as dungeon magic slowly replaces ore.
 	set_resource_node(Vector2i(60, 92), ResourceNodeType.ORE)
 	set_resource_node(Vector2i(59, 84), ResourceNodeType.ORE)
 	set_resource_node(Vector2i(68, 70), ResourceNodeType.ROOT)
