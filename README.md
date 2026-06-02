@@ -37,8 +37,11 @@ Milestone 3D keeps the simple timed non-combat adventurer wave stub. The first
 timed wave starts after 20 seconds, subsequent waves start every 30 seconds,
 and each wave currently spawns one placeholder adventurer party at the Entrance.
 Spawned parties path cardinally through reachable Floor and Entrance tiles
-toward the Overlord room. The marker is intentionally placeholder-only and
-distinct from workers.
+toward the Overlord room. Adventurer route selection treats completed doors and
+traps as higher-cost passable tiles, so parties prefer a modestly longer clean
+route over a shorter route packed with defenses. Doors and traps remain
+passable for outside-access validation. The marker is intentionally
+placeholder-only and distinct from workers.
 
 The Overlord starts with 3 HP. When an adventurer party reaches the Overlord
 room, the party breaches once, stops there, and reduces Overlord HP by 1. If HP
@@ -54,7 +57,7 @@ If no route is available, debug output reports
 `Adventurer path blocked: no route to Overlord room`.
 
 Combat, defenders, loot, gold rewards, varied wave composition, damage systems,
-and full loss screens are future milestones.
+trap damage, and full loss screens are future milestones.
 
 ## Resource Extraction And Recruitment Prototype
 

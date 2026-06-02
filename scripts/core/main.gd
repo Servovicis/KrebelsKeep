@@ -51,6 +51,8 @@ const WORKER_SPEED_TILES_PER_SECOND := 4.0
 const ADVENTURER_SPEED_TILES_PER_SECOND := 3.0
 const DOOR_ADVENTURER_DELAY_SECONDS := 0.45
 const TRAP_ADVENTURER_DELAY_SECONDS := 0.75
+const ADVENTURER_DOOR_PATH_COST := 4
+const ADVENTURER_TRAP_PATH_COST := 3
 const OVERLORD_MAX_HP := 3
 const FIRST_WAVE_DELAY_SECONDS := 20.0
 const WAVE_INTERVAL_SECONDS := 30.0
@@ -467,15 +469,17 @@ func _spawn_adventurer_party() -> RefCounted:
 
 
 func _find_adventurer_target_tile(start_tile: Vector2i) -> Vector2i:
+	var adventurer_tile_costs := _get_adventurer_path_tile_costs()
 	var center := Vector2i(
 		dungeon.overlord_room.position.x + int(dungeon.overlord_room.size.x / 2),
 		dungeon.overlord_room.position.y + int(dungeon.overlord_room.size.y / 2)
 	)
 	if pathfinder.is_passable_tile(center):
-		if center == start_tile or not pathfinder.find_cardinal_path(start_tile, center).is_empty():
+		if center == start_tile or not pathfinder.find_weighted_cardinal_path(start_tile, center, adventurer_tile_costs).is_empty():
 			return center
 
 	var best_tile := Vector2i(-1, -1)
+	var best_path_cost: int = dungeon.size.x * dungeon.size.y * ADVENTURER_DOOR_PATH_COST + 1
 	var best_path_length: int = dungeon.size.x * dungeon.size.y + 1
 	for y in range(dungeon.overlord_room.position.y, dungeon.overlord_room.end.y):
 		for x in range(dungeon.overlord_room.position.x, dungeon.overlord_room.end.x):
@@ -484,17 +488,19 @@ func _find_adventurer_target_tile(start_tile: Vector2i) -> Vector2i:
 				continue
 			if candidate == start_tile:
 				return candidate
-			var candidate_path: Array[Vector2i] = pathfinder.find_cardinal_path(start_tile, candidate)
+			var candidate_path: Array[Vector2i] = pathfinder.find_weighted_cardinal_path(start_tile, candidate, adventurer_tile_costs)
 			if candidate_path.is_empty():
 				continue
-			if candidate_path.size() < best_path_length:
+			var candidate_path_cost: int = pathfinder.get_cardinal_path_cost(candidate_path, adventurer_tile_costs)
+			if candidate_path_cost < best_path_cost or candidate_path_cost == best_path_cost and candidate_path.size() < best_path_length:
 				best_tile = candidate
+				best_path_cost = candidate_path_cost
 				best_path_length = candidate_path.size()
 
 	return best_tile
 
 
-func _plan_adventurer_path(party: RefCounted) -> void:
+func _plan_adventurer_path(party: RefCounted, recalculated: bool = false) -> void:
 	if not dungeon.is_in_bounds(party.target_tile):
 		party.path.clear()
 		party.state = AdventurerPartyScript.PartyState.BLOCKED
@@ -506,7 +512,8 @@ func _plan_adventurer_path(party: RefCounted) -> void:
 		_mark_adventurer_reached_target(party)
 		return
 
-	party.path = pathfinder.find_cardinal_path(party.tile_position, party.target_tile)
+	var adventurer_tile_costs := _get_adventurer_path_tile_costs()
+	party.path = pathfinder.find_weighted_cardinal_path(party.tile_position, party.target_tile, adventurer_tile_costs)
 	if party.path.is_empty():
 		party.state = AdventurerPartyScript.PartyState.BLOCKED
 		last_message = "Adventurer path blocked: no route to Overlord room"
@@ -514,7 +521,14 @@ func _plan_adventurer_path(party: RefCounted) -> void:
 		return
 
 	party.state = AdventurerPartyScript.PartyState.MOVING
-	last_message = "Adventurer party %d pathing to Overlord room" % party.id
+	var path_cost: int = pathfinder.get_cardinal_path_cost(party.path, adventurer_tile_costs)
+	var route_action := "recalculated route" if recalculated else "pathing"
+	last_message = "Adventurer party %d %s to Overlord room (cost %d, length %d)" % [
+		party.id,
+		route_action,
+		path_cost,
+		party.path.size(),
+	]
 	print(last_message)
 
 
@@ -522,7 +536,7 @@ func _replan_adventurer_path(party: RefCounted) -> void:
 	party.path.clear()
 	party.world_position = _tile_center(party.tile_position)
 	party.target_tile = _find_adventurer_target_tile(party.tile_position)
-	_plan_adventurer_path(party)
+	_plan_adventurer_path(party, true)
 
 
 func _update_adventurer_parties(delta: float) -> void:
@@ -1810,6 +1824,18 @@ func _get_cost_debug_text(cost: Dictionary) -> String:
 
 func _update_pathfinder_blocked_tiles() -> void:
 	pathfinder.blocked_tiles = _get_access_blocked_tiles()
+
+
+func _get_adventurer_path_tile_costs() -> Dictionary:
+	var tile_costs: Dictionary = {}
+	for tile_position in buildings:
+		match int(buildings[tile_position]):
+			BuildingDefinitionScript.BuildingType.DOOR_PLACEHOLDER:
+				tile_costs[tile_position] = ADVENTURER_DOOR_PATH_COST
+			BuildingDefinitionScript.BuildingType.TRAP_PLACEHOLDER:
+				tile_costs[tile_position] = ADVENTURER_TRAP_PATH_COST
+
+	return tile_costs
 
 
 func _get_access_blocked_tiles(extra_blocked_tile: Vector2i = Vector2i(-1, -1)) -> Dictionary:
