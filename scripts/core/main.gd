@@ -44,6 +44,9 @@ const COLOR_WORKER_BLOCKED := Color("d95f5f")
 const WORKER_SPEED_TILES_PER_SECOND := 4.0
 const DIG_WORK_REQUIRED := 2.0
 const SOURCE_GATHER_COOLDOWN := 5.0
+# Extractors can work nearby permanent sources. Adjacency is optimal because it
+# minimizes worker travel, but it is not required.
+const EXTRACTOR_SOURCE_RANGE_TILES := 12
 const CARDINAL_DIRECTIONS: Array[Vector2i] = [
 	Vector2i.UP,
 	Vector2i.RIGHT,
@@ -90,7 +93,7 @@ func _ready() -> void:
 	access_valid = access_validator.is_overlord_room_connected(dungeon)
 	var access_message := "Access valid: Overlord room connected to outside" if access_valid else "Access invalid: Overlord room disconnected"
 
-	print("Krebel's Keep Milestone 2E loaded")
+	print("Krebel's Keep Milestone 2F loaded")
 	print(access_message)
 	_spawn_workers()
 	_update_debug_label()
@@ -287,7 +290,7 @@ func _update_debug_label() -> void:
 			worker_task_text,
 		])
 
-	debug_label.text = "Krebel's Keep Milestone 2E loaded\n%s\nResources: %s\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
+	debug_label.text = "Krebel's Keep Milestone 2F loaded\n%s\nResources: %s\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
 		access_message,
 		resource_manager.get_debug_text(),
 		_get_tool_name(active_tool),
@@ -574,9 +577,9 @@ func _register_production_building(tile_position: Vector2i, building_type: Build
 	if not definition.produces_resource:
 		return
 
-	var source_tile := _find_adjacent_resource_source(tile_position, _get_required_source_type(building_type))
+	var source_tile := _find_best_reachable_resource_source(tile_position, _get_required_source_type(building_type))
 	if not dungeon.is_in_bounds(source_tile):
-		last_message = "%s complete but no adjacent source found" % definition.short_name
+		last_message = "%s complete but no reachable source found" % definition.short_name
 		print(last_message)
 		return
 
@@ -585,6 +588,7 @@ func _register_production_building(tile_position: Vector2i, building_type: Build
 		"source_tile": source_tile,
 		"resource_type": definition.production_resource,
 		"resource_amount": definition.production_amount,
+		"idle_message": "",
 	}
 	if not source_cooldowns.has(source_tile):
 		source_cooldowns[source_tile] = 0.0
@@ -605,9 +609,13 @@ func _update_harvest_requests() -> void:
 			continue
 
 		var harvest_data: Dictionary = harvest_buildings[building_tile]
-		var source_tile: Vector2i = harvest_data["source_tile"]
+		var source_tile := _find_best_reachable_resource_source(building_tile, _get_required_source_type(int(harvest_data["building_type"])))
 		if not dungeon.is_in_bounds(source_tile):
+			_report_extractor_idle(building_tile, harvest_data)
 			continue
+		harvest_data["source_tile"] = source_tile
+		harvest_data["idle_message"] = ""
+		harvest_buildings[building_tile] = harvest_data
 		if _has_active_harvest_task_for_source(source_tile):
 			continue
 		if float(source_cooldowns.get(source_tile, 0.0)) > 0.0:
@@ -670,28 +678,71 @@ func _get_invalid_build_reason(tile_position: Vector2i, definition: RefCounted) 
 		return "Invalid build: tile already has a building"
 	if dungeon.get_resource_node(tile_position) != DungeonMapScript.ResourceNodeType.NONE:
 		return "Invalid placement: source tile must remain open"
-	if definition.building_type == BuildingDefinitionScript.BuildingType.MINE_PLACEHOLDER and not _has_adjacent_resource_source(tile_position, DungeonMapScript.ResourceNodeType.ORE):
-		return "Invalid placement: Mine requires adjacent Ore source"
-	if definition.building_type == BuildingDefinitionScript.BuildingType.LUMBERYARD_PLACEHOLDER and not _has_adjacent_resource_source(tile_position, DungeonMapScript.ResourceNodeType.ROOT):
-		return "Invalid placement: Lumberyard requires adjacent Root source"
+	if definition.building_type == BuildingDefinitionScript.BuildingType.MINE_PLACEHOLDER and not _has_reachable_resource_source(tile_position, DungeonMapScript.ResourceNodeType.ORE):
+		return "Invalid placement: Mine requires reachable Ore source"
+	if definition.building_type == BuildingDefinitionScript.BuildingType.LUMBERYARD_PLACEHOLDER and not _has_reachable_resource_source(tile_position, DungeonMapScript.ResourceNodeType.ROOT):
+		return "Invalid placement: Lumberyard requires reachable Root source"
 	if not _would_preserve_outside_access(tile_position):
 		return "Invalid placement: would block outside access"
+	if not _would_preserve_resource_source_access(tile_position):
+		return "Invalid placement: would block source access"
 	if not resource_manager.can_afford(definition.cost):
 		return "Invalid build: insufficient resources for %s" % definition.display_name
 
 	return ""
 
 
-func _has_adjacent_resource_source(tile_position: Vector2i, resource_node_type: int) -> bool:
-	return dungeon.is_in_bounds(_find_adjacent_resource_source(tile_position, resource_node_type))
+func _has_reachable_resource_source(tile_position: Vector2i, resource_node_type: int) -> bool:
+	return dungeon.is_in_bounds(_find_best_reachable_resource_source(tile_position, resource_node_type, tile_position))
 
 
-func _find_adjacent_resource_source(tile_position: Vector2i, resource_node_type: int) -> Vector2i:
-	for direction in CARDINAL_DIRECTIONS:
-		if dungeon.has_resource_node(tile_position + direction, resource_node_type):
-			return tile_position + direction
+func _find_best_reachable_resource_source(tile_position: Vector2i, resource_node_type: int, extra_blocked_tile: Vector2i = Vector2i(-1, -1)) -> Vector2i:
+	if resource_node_type == DungeonMapScript.ResourceNodeType.NONE:
+		return Vector2i(-1, -1)
 
-	return Vector2i(-1, -1)
+	var source_pathfinder := CardinalPathfinderScript.new(dungeon)
+	source_pathfinder.blocked_tiles = _get_access_blocked_tiles(extra_blocked_tile)
+	var building_interaction_tiles: Array[Vector2i] = source_pathfinder.get_cardinal_interaction_tiles(tile_position)
+	if building_interaction_tiles.is_empty():
+		return Vector2i(-1, -1)
+
+	var best_source := Vector2i(-1, -1)
+	var best_distance := EXTRACTOR_SOURCE_RANGE_TILES + 1
+	for y in range(dungeon.size.y):
+		for x in range(dungeon.size.x):
+			var source_tile := Vector2i(x, y)
+			if not dungeon.has_resource_node(source_tile, resource_node_type):
+				continue
+
+			var distance := _get_shortest_interaction_path_distance(source_pathfinder, building_interaction_tiles, source_tile, best_distance)
+			if distance >= 0 and distance < best_distance:
+				best_distance = distance
+				best_source = source_tile
+
+	return best_source
+
+
+func _get_shortest_interaction_path_distance(source_pathfinder: RefCounted, start_tiles: Array[Vector2i], source_tile: Vector2i, best_distance: int) -> int:
+	var source_interaction_tiles: Array[Vector2i] = source_pathfinder.get_cardinal_interaction_tiles(source_tile)
+	if source_interaction_tiles.is_empty():
+		return -1
+
+	var shortest_distance := best_distance
+	for start_tile in start_tiles:
+		for source_interaction_tile in source_interaction_tiles:
+			var distance := 0
+			if start_tile != source_interaction_tile:
+				var path: Array[Vector2i] = source_pathfinder.find_cardinal_path(start_tile, source_interaction_tile)
+				if path.is_empty():
+					continue
+				distance = path.size()
+			if distance <= EXTRACTOR_SOURCE_RANGE_TILES and distance < shortest_distance:
+				shortest_distance = distance
+
+	if shortest_distance == best_distance:
+		return -1
+
+	return shortest_distance
 
 
 func _get_required_source_type(building_type: int) -> int:
@@ -756,9 +807,75 @@ func _has_active_harvest_task_for_source(tile_position: Vector2i) -> bool:
 	return false
 
 
+func _report_extractor_idle(building_tile: Vector2i, harvest_data: Dictionary) -> void:
+	var idle_message := _get_extractor_idle_message(int(harvest_data["building_type"]))
+	if str(harvest_data.get("idle_message", "")) == idle_message:
+		return
+
+	harvest_data["idle_message"] = idle_message
+	harvest_buildings[building_tile] = harvest_data
+	last_message = idle_message
+	print(last_message)
+
+
+func _get_extractor_idle_message(building_type: int) -> String:
+	match building_type:
+		BuildingDefinitionScript.BuildingType.MINE_PLACEHOLDER:
+			return "Mine idle: no reachable Ore source"
+		BuildingDefinitionScript.BuildingType.LUMBERYARD_PLACEHOLDER:
+			return "Lumberyard idle: no reachable Root source"
+		_:
+			return "Extractor idle: no reachable source"
+
+
 func _would_preserve_outside_access(proposed_blocked_tile: Vector2i) -> bool:
 	var access_validator := DungeonAccessValidatorScript.new()
 	return access_validator.is_overlord_room_connected(dungeon, _get_access_blocked_tiles(proposed_blocked_tile))
+
+
+func _would_preserve_resource_source_access(proposed_blocked_tile: Vector2i) -> bool:
+	if not _is_cardinal_neighbor_of_resource_source(proposed_blocked_tile):
+		return true
+
+	var current_blocked_tiles := _get_access_blocked_tiles()
+	var proposed_blocked_tiles := _get_access_blocked_tiles(proposed_blocked_tile)
+	for y in range(dungeon.size.y):
+		for x in range(dungeon.size.x):
+			var source_tile := Vector2i(x, y)
+			if dungeon.get_resource_node(source_tile) == DungeonMapScript.ResourceNodeType.NONE:
+				continue
+			if _count_open_resource_interaction_tiles(source_tile, current_blocked_tiles) > 0 and _count_open_resource_interaction_tiles(source_tile, proposed_blocked_tiles) == 0:
+				return false
+
+	return true
+
+
+func _is_cardinal_neighbor_of_resource_source(tile_position: Vector2i) -> bool:
+	for direction in CARDINAL_DIRECTIONS:
+		if dungeon.is_in_bounds(tile_position + direction) and dungeon.get_resource_node(tile_position + direction) != DungeonMapScript.ResourceNodeType.NONE:
+			return true
+
+	return false
+
+
+func _count_open_resource_interaction_tiles(source_tile: Vector2i, blocked_tiles: Dictionary) -> int:
+	var open_tiles := 0
+	for direction in CARDINAL_DIRECTIONS:
+		var interaction_tile := source_tile + direction
+		if _is_accessible_floor_tile(interaction_tile, blocked_tiles):
+			open_tiles += 1
+
+	return open_tiles
+
+
+func _is_accessible_floor_tile(tile_position: Vector2i, blocked_tiles: Dictionary) -> bool:
+	if not dungeon.is_in_bounds(tile_position):
+		return false
+	if blocked_tiles.has(tile_position):
+		return false
+
+	var tile_type: int = dungeon.get_tile(tile_position)
+	return tile_type == DungeonMapScript.TileType.FLOOR or tile_type == DungeonMapScript.TileType.ENTRANCE
 
 
 func _has_worker_at(tile_position: Vector2i) -> bool:
