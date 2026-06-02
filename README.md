@@ -2,7 +2,7 @@
 
 Krebel's Keep is a 2D top-down tile-based dungeon builder/defense sim prototype.
 
-## Milestone 2I Worker Priority UX Stub
+## Milestone 3A Adventurer Pathing Stub
 
 - Godot version: 4.6.3
 - Language: GDScript
@@ -15,9 +15,24 @@ Krebel's Keep is a 2D top-down tile-based dungeon builder/defense sim prototype.
 2. Import/open this project folder.
 3. Press Run Project or open and run `scenes/main/Main.tscn`.
 
+## Adventurer Pathing Prototype
+
+Milestone 3A adds the first non-combat invasion-side movement stub. One
+placeholder adventurer party spawns automatically at the Entrance and paths
+cardinally through reachable Floor and Entrance tiles toward the Overlord room.
+The marker is intentionally placeholder-only and distinct from workers.
+
+When the party reaches the Overlord room, the game only logs
+`Adventurer party reached the Overlord room` and stops the party there. If no
+route is available, debug output reports
+`Adventurer path blocked: no route to Overlord room`.
+
+Combat, waves, traps, doors, loot, damage, and loss conditions are future
+milestones.
+
 ## Resource Extraction And Recruitment Prototype
 
-Milestone 2I keeps the worker trip prototype and lets Mine/Lumberyard extractors
+Milestone 3A keeps the worker trip prototype and lets Mine/Lumberyard extractors
 use reachable nearby permanent sources instead of requiring direct adjacency.
 Completed extractor buildings request harvest work from the shortest reachable
 matching source within a small cardinal path range. A worker travels to the
@@ -60,14 +75,18 @@ future work.
 
 ## Validation
 
-Milestone 2I is valid when:
+Milestone 3A is valid when:
 
 - The project opens in Godot 4.6.3.
 - The main scene runs.
 - A fixed 128x128 dungeon grid is visible.
 - Solid rock, floor, boundary wall, entrance, and Overlord room tiles are visually distinct.
 - The entrance is near the south-center edge and connects by cardinal floor path to the north-center 5x5 Overlord room.
-- The debug label says `Krebel's Keep Milestone 2I loaded` and shows the hovered tile coordinate/type.
+- The debug label says `Krebel's Keep Milestone 3A loaded` and shows the hovered tile coordinate/type.
+- One adventurer party placeholder appears at or near the Entrance.
+- The adventurer party moves cardinally through reachable Floor/Entrance tiles toward the Overlord room.
+- If its current route is blocked by a new building and another route exists, the party recalculates from its current tile.
+- Reaching the Overlord room only logs `Adventurer party reached the Overlord room`.
 - Hovering a source shows its current/max availability, such as `Exposed Ore Source: 3/5 available`.
 - Camera movement works with WASD or arrow keys.
 - Zoom works with mouse wheel or `+` and `-`.
@@ -84,6 +103,6 @@ Milestone 2I is valid when:
 - Pressing `P` cycles worker focus through Balanced, Digging, Building, and Harvesting.
 - Worker focus makes idle workers prefer eligible tasks of that type without preventing fallback to other eligible work.
 - Ore and Root source tiles remain visible, open, permanent, and regenerating.
-- No worker assignment UI, general hauling, finite source depletion, doors, traps, adventurers, combat, waves, tech tree, or save/load behavior exists yet.
+- No worker assignment UI, general hauling, finite source depletion, doors, traps, combat, waves, tech tree, or save/load behavior exists yet.
 
 Future milestones will add broader hauling/resource logistics.

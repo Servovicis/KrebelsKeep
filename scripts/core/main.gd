@@ -9,6 +9,7 @@ const BuildingDefinitionScript := preload("res://scripts/core/building_definitio
 const ConstructionTaskScript := preload("res://scripts/core/construction_task.gd")
 const HarvestTaskScript := preload("res://scripts/core/harvest_task.gd")
 const WorkerAgentScript := preload("res://scripts/core/worker_agent.gd")
+const AdventurerPartyScript := preload("res://scripts/core/adventurer_party.gd")
 
 const TILE_SIZE := 32
 const CAMERA_SPEED := 600.0
@@ -41,7 +42,11 @@ const COLOR_WORKER_WORKING := Color("f4d35e")
 const COLOR_WORKER_HARVESTING := Color("b7d66a")
 const COLOR_WORKER_DEPOSITING := Color("f3a35c")
 const COLOR_WORKER_BLOCKED := Color("d95f5f")
+const COLOR_ADVENTURER_MOVING := Color("f1d15c")
+const COLOR_ADVENTURER_REACHED := Color("e8f0ff")
+const COLOR_ADVENTURER_BLOCKED := Color("d95f5f")
 const WORKER_SPEED_TILES_PER_SECOND := 4.0
+const ADVENTURER_SPEED_TILES_PER_SECOND := 3.0
 const DIG_WORK_REQUIRED := 2.0
 const EMPTY_SOURCE_RETRY_INTERVAL := 1.0
 # Extractors can work nearby permanent sources. Adjacency is optimal because it
@@ -90,6 +95,7 @@ var workers: Array[RefCounted] = []
 var dig_tasks: Array[RefCounted] = []
 var construction_tasks: Array[RefCounted] = []
 var harvest_tasks: Array[RefCounted] = []
+var adventurer_parties: Array[RefCounted] = []
 var buildings: Dictionary = {}
 var harvest_buildings: Dictionary = {}
 var next_task_id := 1
@@ -106,9 +112,10 @@ func _ready() -> void:
 	access_valid = access_validator.is_overlord_room_connected(dungeon)
 	var access_message := "Access valid: Overlord room connected to outside" if access_valid else "Access invalid: Overlord room disconnected"
 
-	print("Krebel's Keep Milestone 2I loaded")
+	print("Krebel's Keep Milestone 3A loaded")
 	print(access_message)
 	_spawn_workers()
+	_spawn_initial_adventurer_party()
 	_update_debug_label()
 	queue_redraw()
 
@@ -125,6 +132,7 @@ func _process(delta: float) -> void:
 		camera.position += move_direction * CAMERA_SPEED * delta / camera.zoom.x
 
 	_update_workers(delta)
+	_update_adventurer_parties(delta)
 	dungeon.update_resource_regeneration(delta)
 	_update_harvest_requests()
 	_update_debug_label()
@@ -240,6 +248,18 @@ func _draw() -> void:
 		draw_circle(worker.world_position, TILE_SIZE * 0.28, worker_color)
 		draw_circle(worker.world_position, TILE_SIZE * 0.28, Color("0b0f14"), false, 2.0)
 
+	for party in adventurer_parties:
+		var party_color := _get_adventurer_color(party.state)
+		var center: Vector2 = party.world_position
+		var points := PackedVector2Array([
+			center + Vector2(0, -TILE_SIZE * 0.36),
+			center + Vector2(TILE_SIZE * 0.34, 0),
+			center + Vector2(0, TILE_SIZE * 0.36),
+			center + Vector2(-TILE_SIZE * 0.34, 0),
+		])
+		draw_colored_polygon(points, party_color)
+		draw_polyline(PackedVector2Array([points[0], points[1], points[2], points[3], points[0]]), Color("0b0f14"), 2.0)
+
 
 func _draw_resource_source(tile_position: Vector2i, tile_rect: Rect2) -> void:
 	match dungeon.get_resource_node(tile_position):
@@ -307,7 +327,19 @@ func _update_debug_label() -> void:
 			worker_task_text,
 		])
 
-	debug_label.text = "Krebel's Keep Milestone 2I loaded\n%s\nResources: %s\nWorkers: %d\nWorker focus: %s (P)\nWorker economy: %s\nRecruit: R (%s)\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
+	var adventurer_lines: Array[String] = []
+	for party in adventurer_parties:
+		adventurer_lines.append("Adventurer party %d: %s tile %s target %s path %d" % [
+			party.id,
+			_get_adventurer_state_name(party.state),
+			str(party.tile_position),
+			str(party.target_tile),
+			party.path.size(),
+		])
+	if adventurer_lines.is_empty():
+		adventurer_lines.append("Adventurer parties: 0")
+
+	debug_label.text = "Krebel's Keep Milestone 3A loaded\n%s\nResources: %s\nWorkers: %d\nWorker focus: %s (P)\nWorker economy: %s\nRecruit: R (%s)\nTool: %s\n%s\nTasks: %s\n%s\n%s\n%s" % [
 		access_message,
 		resource_manager.get_debug_text(),
 		workers.size(),
@@ -318,6 +350,7 @@ func _update_debug_label() -> void:
 		hover_text,
 		task_counts,
 		"\n".join(worker_lines),
+		"\n".join(adventurer_lines),
 		last_message,
 	]
 
@@ -340,6 +373,127 @@ func _spawn_worker_at(tile_position: Vector2i) -> RefCounted:
 	worker.world_position = _tile_center(worker.tile_position)
 	workers.append(worker)
 	return worker
+
+
+func _spawn_initial_adventurer_party() -> void:
+	if not adventurer_parties.is_empty():
+		return
+	if dungeon.entrance_tiles.is_empty():
+		last_message = "Adventurer path blocked: no Entrance tile"
+		print(last_message)
+		return
+
+	var party := AdventurerPartyScript.new()
+	party.id = 1
+	party.tile_position = dungeon.entrance_tiles[0]
+	party.world_position = _tile_center(party.tile_position)
+	party.target_tile = _find_adventurer_target_tile(party.tile_position)
+	adventurer_parties.append(party)
+	_plan_adventurer_path(party)
+
+
+func _find_adventurer_target_tile(start_tile: Vector2i) -> Vector2i:
+	var center := Vector2i(
+		dungeon.overlord_room.position.x + int(dungeon.overlord_room.size.x / 2),
+		dungeon.overlord_room.position.y + int(dungeon.overlord_room.size.y / 2)
+	)
+	if pathfinder.is_passable_tile(center):
+		if center == start_tile or not pathfinder.find_cardinal_path(start_tile, center).is_empty():
+			return center
+
+	var best_tile := Vector2i(-1, -1)
+	var best_path_length: int = dungeon.size.x * dungeon.size.y + 1
+	for y in range(dungeon.overlord_room.position.y, dungeon.overlord_room.end.y):
+		for x in range(dungeon.overlord_room.position.x, dungeon.overlord_room.end.x):
+			var candidate := Vector2i(x, y)
+			if not pathfinder.is_passable_tile(candidate):
+				continue
+			if candidate == start_tile:
+				return candidate
+			var candidate_path: Array[Vector2i] = pathfinder.find_cardinal_path(start_tile, candidate)
+			if candidate_path.is_empty():
+				continue
+			if candidate_path.size() < best_path_length:
+				best_tile = candidate
+				best_path_length = candidate_path.size()
+
+	return best_tile
+
+
+func _plan_adventurer_path(party: RefCounted) -> void:
+	if not dungeon.is_in_bounds(party.target_tile):
+		party.path.clear()
+		party.state = AdventurerPartyScript.PartyState.BLOCKED
+		last_message = "Adventurer path blocked: no route to Overlord room"
+		print(last_message)
+		return
+
+	if party.tile_position == party.target_tile:
+		_mark_adventurer_reached_target(party)
+		return
+
+	party.path = pathfinder.find_cardinal_path(party.tile_position, party.target_tile)
+	if party.path.is_empty():
+		party.state = AdventurerPartyScript.PartyState.BLOCKED
+		last_message = "Adventurer path blocked: no route to Overlord room"
+		print(last_message)
+		return
+
+	party.state = AdventurerPartyScript.PartyState.MOVING
+	last_message = "Adventurer party %d pathing to Overlord room" % party.id
+	print(last_message)
+
+
+func _replan_adventurer_path(party: RefCounted) -> void:
+	party.path.clear()
+	party.world_position = _tile_center(party.tile_position)
+	party.target_tile = _find_adventurer_target_tile(party.tile_position)
+	_plan_adventurer_path(party)
+
+
+func _update_adventurer_parties(delta: float) -> void:
+	for party in adventurer_parties:
+		if party.reached_target:
+			continue
+		if party.state == AdventurerPartyScript.PartyState.BLOCKED:
+			continue
+		_update_adventurer_movement(party, delta)
+
+
+func _update_adventurer_movement(party: RefCounted, delta: float) -> void:
+	if party.path.is_empty():
+		if dungeon.is_overlord_room(party.tile_position) or party.tile_position == party.target_tile:
+			_mark_adventurer_reached_target(party)
+		else:
+			_plan_adventurer_path(party)
+		return
+
+	var next_tile: Vector2i = party.path[0]
+	if not pathfinder.is_passable_tile(next_tile):
+		_replan_adventurer_path(party)
+		queue_redraw()
+		return
+
+	var next_position := _tile_center(next_tile)
+	var max_distance := ADVENTURER_SPEED_TILES_PER_SECOND * TILE_SIZE * delta
+	party.world_position = party.world_position.move_toward(next_position, max_distance)
+
+	if party.world_position.is_equal_approx(next_position):
+		party.tile_position = next_tile
+		party.path.remove_at(0)
+		if dungeon.is_overlord_room(party.tile_position) or party.tile_position == party.target_tile:
+			_mark_adventurer_reached_target(party)
+
+	queue_redraw()
+
+
+func _mark_adventurer_reached_target(party: RefCounted) -> void:
+	party.reached_target = true
+	party.path.clear()
+	party.state = AdventurerPartyScript.PartyState.REACHED_TARGET
+	last_message = "Adventurer party reached the Overlord room"
+	print(last_message)
+	queue_redraw()
 
 
 func _try_recruit_worker() -> void:
@@ -1220,6 +1374,16 @@ func _get_worker_color(state: int) -> Color:
 			return Color.MAGENTA
 
 
+func _get_adventurer_color(state: int) -> Color:
+	match state:
+		AdventurerPartyScript.PartyState.REACHED_TARGET:
+			return COLOR_ADVENTURER_REACHED
+		AdventurerPartyScript.PartyState.BLOCKED:
+			return COLOR_ADVENTURER_BLOCKED
+		_:
+			return COLOR_ADVENTURER_MOVING
+
+
 func _get_dig_task_color(task: RefCounted) -> Color:
 	if task.status == DigTaskScript.TaskStatus.ASSIGNED or task.status == DigTaskScript.TaskStatus.IN_PROGRESS:
 		return COLOR_DIG_TASK_ASSIGNED
@@ -1252,6 +1416,20 @@ func _get_worker_state_name(worker: RefCounted) -> String:
 		WorkerAgentScript.WorkerState.DEPOSITING:
 			return "Depositing"
 		WorkerAgentScript.WorkerState.BLOCKED:
+			return "Blocked"
+		_:
+			return "Unknown"
+
+
+func _get_adventurer_state_name(state: int) -> String:
+	match state:
+		AdventurerPartyScript.PartyState.PATHING:
+			return "Pathing"
+		AdventurerPartyScript.PartyState.MOVING:
+			return "Moving"
+		AdventurerPartyScript.PartyState.REACHED_TARGET:
+			return "ReachedTarget"
+		AdventurerPartyScript.PartyState.BLOCKED:
 			return "Blocked"
 		_:
 			return "Unknown"
