@@ -19,6 +19,8 @@ const COLOR_FLOOR := Color("4b5966")
 const COLOR_BOUNDARY_WALL := Color("11151a")
 const COLOR_ENTRANCE := Color("c58b3d")
 const COLOR_OVERLORD_ROOM := Color("795d9a")
+const COLOR_ORE_NODE := Color("b9c3cf")
+const COLOR_ROOT_NODE := Color("7aa15f")
 const COLOR_GRID_MAJOR := Color("3b4652")
 const COLOR_GRID_MINOR := Color("2b333c")
 const COLOR_DIG_TASK := Color("d6b24a", 0.55)
@@ -74,7 +76,7 @@ func _ready() -> void:
 	access_valid = access_validator.is_overlord_room_connected(dungeon)
 	var access_message := "Access valid: Overlord room connected to outside" if access_valid else "Access invalid: Overlord room disconnected"
 
-	print("Krebel's Keep Milestone 2B loaded")
+	print("Krebel's Keep Milestone 2C loaded")
 	print(access_message)
 	_spawn_workers()
 	_update_debug_label()
@@ -157,6 +159,7 @@ func _draw() -> void:
 			var tile_position := Vector2i(x, y)
 			var tile_rect := Rect2(Vector2(tile_position * TILE_SIZE), Vector2(TILE_SIZE, TILE_SIZE))
 			draw_rect(tile_rect, _get_tile_color(tile_position), true)
+			_draw_resource_node(tile_position, tile_rect)
 
 	for x in range(dungeon.size.x + 1):
 		var x_pos := x * TILE_SIZE
@@ -194,6 +197,26 @@ func _draw() -> void:
 		var worker_color := _get_worker_color(worker.state)
 		draw_circle(worker.world_position, TILE_SIZE * 0.28, worker_color)
 		draw_circle(worker.world_position, TILE_SIZE * 0.28, Color("0b0f14"), false, 2.0)
+
+
+func _draw_resource_node(tile_position: Vector2i, tile_rect: Rect2) -> void:
+	match dungeon.get_resource_node(tile_position):
+		DungeonMapScript.ResourceNodeType.ORE:
+			var center := tile_rect.get_center()
+			var points := PackedVector2Array([
+				center + Vector2(0, -10),
+				center + Vector2(9, -3),
+				center + Vector2(7, 8),
+				center + Vector2(-8, 8),
+				center + Vector2(-10, -2),
+			])
+			draw_colored_polygon(points, COLOR_ORE_NODE)
+			draw_polyline(PackedVector2Array([points[0], points[1], points[2], points[3], points[4], points[0]]), Color("1a1d22"), 2.0)
+		DungeonMapScript.ResourceNodeType.ROOT:
+			var center := tile_rect.get_center()
+			draw_circle(center, TILE_SIZE * 0.24, COLOR_ROOT_NODE)
+			draw_arc(center, TILE_SIZE * 0.22, -PI * 0.1, PI * 1.15, 12, Color("2f482b"), 2.0)
+			draw_line(center + Vector2(-8, 6), center + Vector2(8, -7), Color("2f482b"), 2.0)
 
 
 func _zoom_camera(amount: float) -> void:
@@ -242,7 +265,7 @@ func _update_debug_label() -> void:
 			worker_task_text,
 		])
 
-	debug_label.text = "Krebel's Keep - Milestone 2B loaded\n%s\nResources: %s\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
+	debug_label.text = "Krebel's Keep Milestone 2C loaded\n%s\nResources: %s\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
 		access_message,
 		resource_manager.get_debug_text(),
 		_get_tool_name(active_tool),
@@ -522,6 +545,10 @@ func _get_invalid_build_reason(tile_position: Vector2i, definition: RefCounted) 
 		return "Invalid build: tile already has a construction task"
 	if _has_building_at(tile_position):
 		return "Invalid build: tile already has a building"
+	if definition.building_type == BuildingDefinitionScript.BuildingType.MINE_PLACEHOLDER and not dungeon.has_resource_node(tile_position, DungeonMapScript.ResourceNodeType.ORE):
+		return "Invalid placement: Mine requires Ore node"
+	if definition.building_type == BuildingDefinitionScript.BuildingType.LUMBERYARD_PLACEHOLDER and not dungeon.has_resource_node(tile_position, DungeonMapScript.ResourceNodeType.ROOT):
+		return "Invalid placement: Lumberyard requires Root/Timber node"
 	if not _would_preserve_outside_access(tile_position):
 		return "Invalid placement: would block outside access"
 	if not resource_manager.can_afford(definition.cost):
