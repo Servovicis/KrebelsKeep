@@ -36,6 +36,8 @@ const COLOR_BARRACKS := Color("9d4f52")
 const COLOR_WORKSHOP := Color("507dba")
 const COLOR_LUMBERYARD := Color("4f9b5b")
 const COLOR_MINE := Color("8b8f99")
+const COLOR_DOOR := Color("b48a57")
+const COLOR_TRAP := Color("8065c8")
 const COLOR_WORKER_IDLE := Color("7bd88f")
 const COLOR_WORKER_MOVING := Color("6fb7ff")
 const COLOR_WORKER_WORKING := Color("f4d35e")
@@ -47,6 +49,8 @@ const COLOR_ADVENTURER_REACHED := Color("e8f0ff")
 const COLOR_ADVENTURER_BLOCKED := Color("d95f5f")
 const WORKER_SPEED_TILES_PER_SECOND := 4.0
 const ADVENTURER_SPEED_TILES_PER_SECOND := 3.0
+const DOOR_ADVENTURER_DELAY_SECONDS := 0.45
+const TRAP_ADVENTURER_DELAY_SECONDS := 0.75
 const OVERLORD_MAX_HP := 3
 const FIRST_WAVE_DELAY_SECONDS := 20.0
 const WAVE_INTERVAL_SECONDS := 30.0
@@ -75,6 +79,8 @@ enum ToolMode {
 	BUILD_WORKSHOP,
 	BUILD_LUMBERYARD,
 	BUILD_MINE,
+	BUILD_DOOR,
+	BUILD_TRAP,
 }
 
 enum WorkerFocus {
@@ -120,7 +126,7 @@ func _ready() -> void:
 	access_valid = access_validator.is_overlord_room_connected(dungeon)
 	var access_message := "Access valid: Overlord room connected to outside" if access_valid else "Access invalid: Overlord room disconnected"
 
-	print("Krebel's Keep Milestone 3C loaded")
+	print("Krebel's Keep Milestone 3D loaded")
 	print(access_message)
 	_spawn_workers()
 	_update_debug_label()
@@ -171,6 +177,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		active_tool = ToolMode.BUILD_MINE if active_tool != ToolMode.BUILD_MINE else ToolMode.SELECT
 		last_message = "Build Mine active" if active_tool == ToolMode.BUILD_MINE else "Select tool active"
 		_update_debug_label()
+	elif event.is_action_pressed("tool_build_door"):
+		active_tool = ToolMode.BUILD_DOOR if active_tool != ToolMode.BUILD_DOOR else ToolMode.SELECT
+		last_message = "Build Door active" if active_tool == ToolMode.BUILD_DOOR else "Select tool active"
+		_update_debug_label()
+	elif event.is_action_pressed("tool_build_trap"):
+		active_tool = ToolMode.BUILD_TRAP if active_tool != ToolMode.BUILD_TRAP else ToolMode.SELECT
+		last_message = "Build Trap active" if active_tool == ToolMode.BUILD_TRAP else "Select tool active"
+		_update_debug_label()
 	elif event.is_action_pressed("recruit_worker"):
 		_try_recruit_worker()
 	elif event.is_action_pressed("cycle_worker_focus"):
@@ -189,6 +203,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				_try_create_construction_task(_get_hovered_tile(), BuildingDefinitionScript.BuildingType.LUMBERYARD_PLACEHOLDER)
 			ToolMode.BUILD_MINE:
 				_try_create_construction_task(_get_hovered_tile(), BuildingDefinitionScript.BuildingType.MINE_PLACEHOLDER)
+			ToolMode.BUILD_DOOR:
+				_try_create_construction_task(_get_hovered_tile(), BuildingDefinitionScript.BuildingType.DOOR_PLACEHOLDER)
+			ToolMode.BUILD_TRAP:
+				_try_create_construction_task(_get_hovered_tile(), BuildingDefinitionScript.BuildingType.TRAP_PLACEHOLDER)
 	elif event.is_action_pressed("cancel"):
 		if active_tool == ToolMode.DIG and _try_cancel_dig_task(_get_hovered_tile()):
 			return
@@ -349,7 +367,7 @@ func _update_debug_label() -> void:
 	if adventurer_lines.is_empty():
 		adventurer_lines.append("Adventurer parties: 0")
 
-	debug_label.text = "Krebel's Keep Milestone 3C loaded\n%s\nResources: %s\n%s\n%s\nThreat test: V spawn adventurer party\nWorkers: %d\nWorker focus: %s (P)\nWorker economy: %s\nRecruit: R (%s)\nTool: %s\n%s\nTasks: %s\n%s\n%s\n%s" % [
+	debug_label.text = "Krebel's Keep Milestone 3D loaded\n%s\nResources: %s\n%s\n%s\nThreat test: V spawn adventurer party\nDefense build: O Door, T Trap\nWorkers: %d\nWorker focus: %s (P)\nWorker economy: %s\nRecruit: R (%s)\nTool: %s\n%s\nTasks: %s\n%s\n%s\n%s" % [
 		access_message,
 		resource_manager.get_debug_text(),
 		_get_overlord_threat_text(),
@@ -517,6 +535,11 @@ func _update_adventurer_parties(delta: float) -> void:
 
 
 func _update_adventurer_movement(party: RefCounted, delta: float) -> void:
+	if party.movement_delay_remaining > 0.0:
+		party.movement_delay_remaining = maxf(0.0, party.movement_delay_remaining - delta)
+		queue_redraw()
+		return
+
 	if party.path.is_empty():
 		if dungeon.is_overlord_room(party.tile_position) or party.tile_position == party.target_tile:
 			_mark_adventurer_reached_target(party)
@@ -537,10 +560,32 @@ func _update_adventurer_movement(party: RefCounted, delta: float) -> void:
 	if party.world_position.is_equal_approx(next_position):
 		party.tile_position = next_tile
 		party.path.remove_at(0)
+		_handle_adventurer_entered_tile(party)
 		if dungeon.is_overlord_room(party.tile_position) or party.tile_position == party.target_tile:
 			_mark_adventurer_reached_target(party)
 
 	queue_redraw()
+
+
+func _handle_adventurer_entered_tile(party: RefCounted) -> void:
+	if not buildings.has(party.tile_position):
+		return
+
+	var building_type: int = int(buildings[party.tile_position])
+	match building_type:
+		BuildingDefinitionScript.BuildingType.DOOR_PLACEHOLDER:
+			party.movement_delay_remaining = maxf(party.movement_delay_remaining, DOOR_ADVENTURER_DELAY_SECONDS)
+			last_message = "Door slows adventurer party %d at %s" % [party.id, str(party.tile_position)]
+			print(last_message)
+			_update_debug_label()
+		BuildingDefinitionScript.BuildingType.TRAP_PLACEHOLDER:
+			if party.triggered_trap_tiles.has(party.tile_position):
+				return
+			party.triggered_trap_tiles[party.tile_position] = true
+			party.movement_delay_remaining = maxf(party.movement_delay_remaining, TRAP_ADVENTURER_DELAY_SECONDS)
+			last_message = "Adventurer party triggered trap at %s" % str(party.tile_position)
+			print(last_message)
+			_update_debug_label()
 
 
 func _mark_adventurer_reached_target(party: RefCounted) -> void:
@@ -1020,9 +1065,9 @@ func _get_invalid_build_reason(tile_position: Vector2i, definition: RefCounted) 
 		return "Invalid placement: Mine requires reachable Ore source"
 	if definition.building_type == BuildingDefinitionScript.BuildingType.LUMBERYARD_PLACEHOLDER and not _has_reachable_resource_source(tile_position, DungeonMapScript.ResourceNodeType.ROOT):
 		return "Invalid placement: Lumberyard requires reachable Root source"
-	if not _would_preserve_outside_access(tile_position):
+	if definition.blocks_movement and not _would_preserve_outside_access(tile_position):
 		return "Invalid placement: would block outside access"
-	if not _would_preserve_resource_source_access(tile_position):
+	if definition.blocks_movement and not _would_preserve_resource_source_access(tile_position):
 		return "Invalid placement: would block source access"
 	if not resource_manager.can_afford(definition.cost):
 		return "Invalid build: insufficient resources for %s" % definition.display_name
@@ -1580,6 +1625,10 @@ func _get_tool_name(tool: ToolMode) -> String:
 			return "Build Lumberyard"
 		ToolMode.BUILD_MINE:
 			return "Build Mine"
+		ToolMode.BUILD_DOOR:
+			return "Build Door"
+		ToolMode.BUILD_TRAP:
+			return "Build Trap"
 		_:
 			return "Unknown"
 
@@ -1731,6 +1780,10 @@ func _get_building_color(building_type: int) -> Color:
 			return COLOR_LUMBERYARD
 		BuildingDefinitionScript.BuildingType.MINE_PLACEHOLDER:
 			return COLOR_MINE
+		BuildingDefinitionScript.BuildingType.DOOR_PLACEHOLDER:
+			return COLOR_DOOR
+		BuildingDefinitionScript.BuildingType.TRAP_PLACEHOLDER:
+			return COLOR_TRAP
 		_:
 			return Color.MAGENTA
 
@@ -1762,12 +1815,20 @@ func _update_pathfinder_blocked_tiles() -> void:
 func _get_access_blocked_tiles(extra_blocked_tile: Vector2i = Vector2i(-1, -1)) -> Dictionary:
 	var blocked_tiles: Dictionary = {}
 	for tile_position in buildings:
-		blocked_tiles[tile_position] = true
+		if _is_blocking_building_type(int(buildings[tile_position])):
+			blocked_tiles[tile_position] = true
 	for task in construction_tasks:
 		if task.status == ConstructionTaskScript.TaskStatus.COMPLETE or task.status == ConstructionTaskScript.TaskStatus.CANCELED:
 			continue
-		blocked_tiles[task.target_tile] = true
+		if _is_blocking_building_type(task.building_type):
+			blocked_tiles[task.target_tile] = true
 	if dungeon != null and dungeon.is_in_bounds(extra_blocked_tile):
 		blocked_tiles[extra_blocked_tile] = true
 
 	return blocked_tiles
+
+
+func _is_blocking_building_type(building_type: int) -> bool:
+	var definition := BuildingDefinitionScript.new()
+	definition.configure(building_type)
+	return definition.blocks_movement

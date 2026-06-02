@@ -8,6 +8,8 @@ enum BuildingType {
 	WORKSHOP_PLACEHOLDER,
 	LUMBERYARD_PLACEHOLDER,
 	MINE_PLACEHOLDER,
+	DOOR_PLACEHOLDER,
+	TRAP_PLACEHOLDER,
 }
 
 var building_type: BuildingType = BuildingType.BARRACKS_PLACEHOLDER
@@ -19,6 +21,7 @@ var produces_resource := false
 var production_resource: ResourceManagerScript.ResourceType = ResourceManagerScript.ResourceType.WOOD
 var production_amount := 0
 var production_interval := 0.0
+var blocks_movement := true
 
 
 func configure(type: BuildingType) -> void:
@@ -28,6 +31,7 @@ func configure(type: BuildingType) -> void:
 	production_resource = ResourceManagerScript.ResourceType.WOOD
 	production_amount = 0
 	production_interval = 0.0
+	blocks_movement = true
 
 	match type:
 		BuildingType.BARRACKS_PLACEHOLDER:
@@ -68,6 +72,26 @@ func configure(type: BuildingType) -> void:
 			production_resource = ResourceManagerScript.ResourceType.ORE
 			production_amount = 1
 			production_interval = 5.0
+		BuildingType.DOOR_PLACEHOLDER:
+			display_name = "DoorPlaceholder"
+			short_name = "Door"
+			cost = {
+				ResourceManagerScript.ResourceType.WOOD: 15,
+				ResourceManagerScript.ResourceType.ORE: 5,
+				ResourceManagerScript.ResourceType.GOLD: 0,
+			}
+			build_time = 2.0
+			blocks_movement = false
+		BuildingType.TRAP_PLACEHOLDER:
+			display_name = "TrapPlaceholder"
+			short_name = "Trap"
+			cost = {
+				ResourceManagerScript.ResourceType.WOOD: 10,
+				ResourceManagerScript.ResourceType.ORE: 10,
+				ResourceManagerScript.ResourceType.GOLD: 0,
+			}
+			build_time = 2.0
+			blocks_movement = false
 
 
 static func get_type_name(type: BuildingType) -> String:
@@ -80,5 +104,9 @@ static func get_type_name(type: BuildingType) -> String:
 			return "LumberyardPlaceholder"
 		BuildingType.MINE_PLACEHOLDER:
 			return "MinePlaceholder"
+		BuildingType.DOOR_PLACEHOLDER:
+			return "DoorPlaceholder"
+		BuildingType.TRAP_PLACEHOLDER:
+			return "TrapPlaceholder"
 		_:
 			return "UnknownBuilding"

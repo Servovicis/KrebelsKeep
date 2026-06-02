@@ -16,3 +16,5 @@ var path: Array[Vector2i] = []
 var state: PartyState = PartyState.PATHING
 var reached_target := false
 var breached_overlord_room := false
+var movement_delay_remaining := 0.0
+var triggered_trap_tiles: Dictionary = {}

@@ -2,7 +2,7 @@
 
 Krebel's Keep is a 2D top-down tile-based dungeon builder/defense sim prototype.
 
-## Milestone 3C Adventurer Wave Timing Stub
+## Milestone 3D Defensive Placement Stub
 
 - Godot version: 4.6.3
 - Language: GDScript
@@ -15,9 +15,25 @@ Krebel's Keep is a 2D top-down tile-based dungeon builder/defense sim prototype.
 2. Import/open this project folder.
 3. Press Run Project or open and run `scenes/main/Main.tscn`.
 
+## Defensive Placement Prototype
+
+Milestone 3D adds one-tile `DoorPlaceholder` and `TrapPlaceholder` defensive
+objects through the existing construction flow. Press `O` to select Door build
+mode and `T` to select Trap build mode, then left-click a valid Floor tile to
+queue construction. Doors cost 15 Wood and 5 Ore; traps cost 10 Wood and 10
+Ore. Both take 2 seconds of worker construction time.
+
+Doors and traps are passable placeholders. They reserve their tile for
+placement, but do not block worker/adventurer pathing or outside-access
+validation. Completed doors briefly slow adventurer parties that cross them.
+Completed traps show `Adventurer party triggered trap at (x, y)` when an
+adventurer party steps on the trap and briefly delay that party. A trap can
+trigger once per party for each trap tile; real damage, combat, trap balance,
+door locking, and open/close logic are future work.
+
 ## Adventurer Wave Prototype
 
-Milestone 3C adds a simple timed non-combat adventurer wave stub. The first
+Milestone 3D keeps the simple timed non-combat adventurer wave stub. The first
 timed wave starts after 20 seconds, subsequent waves start every 30 seconds,
 and each wave currently spawns one placeholder adventurer party at the Entrance.
 Spawned parties path cardinally through reachable Floor and Entrance tiles
@@ -37,12 +53,12 @@ the timed wave stub.
 If no route is available, debug output reports
 `Adventurer path blocked: no route to Overlord room`.
 
-Combat, defenders, traps, doors, loot, gold rewards, varied wave composition,
-damage systems, and full loss screens are future milestones.
+Combat, defenders, loot, gold rewards, varied wave composition, damage systems,
+and full loss screens are future milestones.
 
 ## Resource Extraction And Recruitment Prototype
 
-Milestone 3C keeps the worker trip prototype and lets Mine/Lumberyard extractors
+Milestone 3D keeps the worker trip prototype and lets Mine/Lumberyard extractors
 use reachable nearby permanent sources instead of requiring direct adjacency.
 Completed extractor buildings request harvest work from the shortest reachable
 matching source within a small cardinal path range. A worker travels to the
@@ -85,19 +101,25 @@ future work.
 
 ## Validation
 
-Milestone 3C is valid when:
+Milestone 3D is valid when:
 
 - The project opens in Godot 4.6.3.
 - The main scene runs.
 - A fixed 128x128 dungeon grid is visible.
 - Solid rock, floor, boundary wall, entrance, and Overlord room tiles are visually distinct.
 - The entrance is near the south-center edge and connects by cardinal floor path to the north-center 5x5 Overlord room.
-- The debug label says `Krebel's Keep Milestone 3C loaded` and shows the hovered tile coordinate/type.
+- The debug label says `Krebel's Keep Milestone 3D loaded` and shows the hovered tile coordinate/type.
 - The debug label shows Overlord HP.
 - The debug label shows the current wave, countdown until the next wave, and active/resolved adventurer party counts.
 - The first timed wave spawns one adventurer party at or near the Entrance after 20 seconds.
 - The adventurer party moves cardinally through reachable Floor/Entrance tiles toward the Overlord room.
 - If its current route is blocked by a new building and another route exists, the party recalculates from its current tile.
+- Pressing `O` selects Door build mode, and pressing `T` selects Trap build mode.
+- Door and Trap placement rejects invalid/non-Floor/reserved/source/Entrance/Overlord-room tiles.
+- Door and Trap placement on valid Floor deducts resources, queues construction, and completes through worker construction.
+- Completed doors and traps are visible, passable, and do not break outside-access validation.
+- Adventurer parties crossing a completed door show door slow debug feedback and remain able to reach the Overlord room.
+- Adventurer parties stepping on a completed trap show `Adventurer party triggered trap at (x, y)` and are briefly delayed.
 - Reaching the Overlord room logs an Overlord breach message and reduces Overlord HP by 1.
 - The same party does not repeatedly damage the Overlord every frame.
 - Pressing `V` spawns another debug adventurer party, allowing HP to reach 0.
@@ -119,6 +141,6 @@ Milestone 3C is valid when:
 - Pressing `P` cycles worker focus through Balanced, Digging, Building, and Harvesting.
 - Worker focus makes idle workers prefer eligible tasks of that type without preventing fallback to other eligible work.
 - Ore and Root source tiles remain visible, open, permanent, and regenerating.
-- No worker assignment UI, general hauling, finite source depletion, doors, traps, combat, defenders, loot, gold rewards, varied wave composition, tech tree, or save/load behavior exists yet.
+- No worker assignment UI, general hauling, finite source depletion, combat, defenders, loot, gold rewards, varied wave composition, tech tree, or save/load behavior exists yet.
 
 Future milestones will add broader hauling/resource logistics.
