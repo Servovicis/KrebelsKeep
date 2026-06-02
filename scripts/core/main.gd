@@ -512,6 +512,8 @@ func _get_invalid_build_reason(tile_position: Vector2i, definition: RefCounted) 
 		return "Invalid build: boundary wall"
 	if tile_type == DungeonMapScript.TileType.ENTRANCE:
 		return "Invalid build: entrance tile"
+	if dungeon.is_overlord_room(tile_position):
+		return "Invalid placement: Overlord room is reserved"
 	if tile_type != DungeonMapScript.TileType.FLOOR:
 		return "Invalid build: target must be Floor"
 	if _has_active_dig_task(tile_position):
