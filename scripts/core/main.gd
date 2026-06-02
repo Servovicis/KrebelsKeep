@@ -28,6 +28,8 @@ const COLOR_CONSTRUCTION_TASK := Color("d99543", 0.68)
 const COLOR_CONSTRUCTION_TASK_ASSIGNED := Color("6cd4c8", 0.58)
 const COLOR_BARRACKS := Color("9d4f52")
 const COLOR_WORKSHOP := Color("507dba")
+const COLOR_LUMBERYARD := Color("4f9b5b")
+const COLOR_MINE := Color("8b8f99")
 const COLOR_WORKER_IDLE := Color("7bd88f")
 const COLOR_WORKER_MOVING := Color("6fb7ff")
 const COLOR_WORKER_WORKING := Color("f4d35e")
@@ -40,6 +42,8 @@ enum ToolMode {
 	DIG,
 	BUILD_BARRACKS,
 	BUILD_WORKSHOP,
+	BUILD_LUMBERYARD,
+	BUILD_MINE,
 }
 
 @onready var camera: Camera2D = $Camera2D
@@ -55,6 +59,7 @@ var workers: Array[RefCounted] = []
 var dig_tasks: Array[RefCounted] = []
 var construction_tasks: Array[RefCounted] = []
 var buildings: Dictionary = {}
+var production_timers: Dictionary = {}
 var next_task_id := 1
 var next_task_order := 1
 var last_message := "Ready"
@@ -69,7 +74,7 @@ func _ready() -> void:
 	access_valid = access_validator.is_overlord_room_connected(dungeon)
 	var access_message := "Access valid: Overlord room connected to outside" if access_valid else "Access invalid: Overlord room disconnected"
 
-	print("Krebel's Keep Milestone 2A loaded")
+	print("Krebel's Keep Milestone 2B loaded")
 	print(access_message)
 	_spawn_workers()
 	_update_debug_label()
@@ -88,6 +93,7 @@ func _process(delta: float) -> void:
 		camera.position += move_direction * CAMERA_SPEED * delta / camera.zoom.x
 
 	_update_workers(delta)
+	_update_building_production(delta)
 	_update_debug_label()
 
 
@@ -108,6 +114,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		active_tool = ToolMode.BUILD_WORKSHOP if active_tool != ToolMode.BUILD_WORKSHOP else ToolMode.SELECT
 		last_message = "Build Workshop active" if active_tool == ToolMode.BUILD_WORKSHOP else "Select tool active"
 		_update_debug_label()
+	elif event.is_action_pressed("tool_build_lumberyard"):
+		active_tool = ToolMode.BUILD_LUMBERYARD if active_tool != ToolMode.BUILD_LUMBERYARD else ToolMode.SELECT
+		last_message = "Build Lumberyard active" if active_tool == ToolMode.BUILD_LUMBERYARD else "Select tool active"
+		_update_debug_label()
+	elif event.is_action_pressed("tool_build_mine"):
+		active_tool = ToolMode.BUILD_MINE if active_tool != ToolMode.BUILD_MINE else ToolMode.SELECT
+		last_message = "Build Mine active" if active_tool == ToolMode.BUILD_MINE else "Select tool active"
+		_update_debug_label()
 	elif event.is_action_pressed("select"):
 		match active_tool:
 			ToolMode.DIG:
@@ -116,6 +130,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				_try_create_construction_task(_get_hovered_tile(), BuildingDefinitionScript.BuildingType.BARRACKS_PLACEHOLDER)
 			ToolMode.BUILD_WORKSHOP:
 				_try_create_construction_task(_get_hovered_tile(), BuildingDefinitionScript.BuildingType.WORKSHOP_PLACEHOLDER)
+			ToolMode.BUILD_LUMBERYARD:
+				_try_create_construction_task(_get_hovered_tile(), BuildingDefinitionScript.BuildingType.LUMBERYARD_PLACEHOLDER)
+			ToolMode.BUILD_MINE:
+				_try_create_construction_task(_get_hovered_tile(), BuildingDefinitionScript.BuildingType.MINE_PLACEHOLDER)
 	elif event.is_action_pressed("cancel"):
 		if active_tool == ToolMode.DIG and _try_cancel_dig_task(_get_hovered_tile()):
 			return
@@ -224,7 +242,7 @@ func _update_debug_label() -> void:
 			worker_task_text,
 		])
 
-	debug_label.text = "Krebel's Keep - Milestone 2A loaded\n%s\nResources: %s\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
+	debug_label.text = "Krebel's Keep - Milestone 2B loaded\n%s\nResources: %s\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
 		access_message,
 		resource_manager.get_debug_text(),
 		_get_tool_name(active_tool),
@@ -333,6 +351,7 @@ func _update_worker_work(worker: RefCounted, delta: float) -> void:
 
 	if _is_construction_task(task):
 		buildings[task.target_tile] = task.building_type
+		_register_production_building(task.target_tile, task.building_type)
 	else:
 		dungeon.set_tile(task.target_tile, DungeonMapScript.TileType.FLOOR)
 
@@ -406,6 +425,49 @@ func _try_create_construction_task(tile_position: Vector2i, building_type: Build
 	print(last_message)
 	_update_debug_label()
 	queue_redraw()
+
+
+func _register_production_building(tile_position: Vector2i, building_type: BuildingDefinitionScript.BuildingType) -> void:
+	var definition := BuildingDefinitionScript.new()
+	definition.configure(building_type)
+	if not definition.produces_resource:
+		return
+
+	production_timers[tile_position] = 0.0
+
+
+func _update_building_production(delta: float) -> void:
+	if production_timers.is_empty():
+		return
+
+	var produced := false
+	for tile_position in production_timers.keys():
+		if not buildings.has(tile_position):
+			production_timers.erase(tile_position)
+			continue
+
+		var definition := BuildingDefinitionScript.new()
+		definition.configure(buildings[tile_position])
+		if not definition.produces_resource:
+			production_timers.erase(tile_position)
+			continue
+
+		var timer := float(production_timers[tile_position]) + delta
+		while timer >= definition.production_interval:
+			timer -= definition.production_interval
+			resource_manager.add(definition.production_resource, definition.production_amount)
+			last_message = "%s produced +%d %s" % [
+				definition.display_name,
+				definition.production_amount,
+				_get_resource_name(definition.production_resource),
+			]
+			print(last_message)
+			produced = true
+
+		production_timers[tile_position] = timer
+
+	if produced:
+		_update_debug_label()
 
 
 func _get_invalid_dig_reason(tile_position: Vector2i) -> String:
@@ -681,6 +743,10 @@ func _get_tool_name(tool: ToolMode) -> String:
 			return "Build Barracks"
 		ToolMode.BUILD_WORKSHOP:
 			return "Build Workshop"
+		ToolMode.BUILD_LUMBERYARD:
+			return "Build Lumberyard"
+		ToolMode.BUILD_MINE:
+			return "Build Mine"
 		_:
 			return "Unknown"
 
@@ -728,8 +794,24 @@ func _get_building_color(building_type: int) -> Color:
 			return COLOR_BARRACKS
 		BuildingDefinitionScript.BuildingType.WORKSHOP_PLACEHOLDER:
 			return COLOR_WORKSHOP
+		BuildingDefinitionScript.BuildingType.LUMBERYARD_PLACEHOLDER:
+			return COLOR_LUMBERYARD
+		BuildingDefinitionScript.BuildingType.MINE_PLACEHOLDER:
+			return COLOR_MINE
 		_:
 			return Color.MAGENTA
+
+
+func _get_resource_name(resource_type: ResourceManagerScript.ResourceType) -> String:
+	match resource_type:
+		ResourceManagerScript.ResourceType.WOOD:
+			return "Wood"
+		ResourceManagerScript.ResourceType.ORE:
+			return "Ore"
+		ResourceManagerScript.ResourceType.GOLD:
+			return "Gold"
+		_:
+			return "Unknown"
 
 
 func _update_pathfinder_blocked_tiles() -> void:

@@ -32,6 +32,10 @@ func spend(cost: Dictionary) -> bool:
 	return true
 
 
+func add(resource_type: ResourceType, amount: int) -> void:
+	resources[resource_type] = get_amount(resource_type) + amount
+
+
 func get_amount(resource_type: ResourceType) -> int:
 	return int(resources.get(resource_type, 0))
 
