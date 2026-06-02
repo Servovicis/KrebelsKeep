@@ -47,6 +47,7 @@ const COLOR_ADVENTURER_REACHED := Color("e8f0ff")
 const COLOR_ADVENTURER_BLOCKED := Color("d95f5f")
 const WORKER_SPEED_TILES_PER_SECOND := 4.0
 const ADVENTURER_SPEED_TILES_PER_SECOND := 3.0
+const OVERLORD_MAX_HP := 3
 const DIG_WORK_REQUIRED := 2.0
 const EMPTY_SOURCE_RETRY_INTERVAL := 1.0
 # Extractors can work nearby permanent sources. Adjacency is optimal because it
@@ -98,6 +99,8 @@ var harvest_tasks: Array[RefCounted] = []
 var adventurer_parties: Array[RefCounted] = []
 var buildings: Dictionary = {}
 var harvest_buildings: Dictionary = {}
+var overlord_hp := OVERLORD_MAX_HP
+var overlord_loss_message := ""
 var next_task_id := 1
 var next_task_order := 1
 var last_message := "Ready"
@@ -112,7 +115,7 @@ func _ready() -> void:
 	access_valid = access_validator.is_overlord_room_connected(dungeon)
 	var access_message := "Access valid: Overlord room connected to outside" if access_valid else "Access invalid: Overlord room disconnected"
 
-	print("Krebel's Keep Milestone 3A loaded")
+	print("Krebel's Keep Milestone 3B loaded")
 	print(access_message)
 	_spawn_workers()
 	_spawn_initial_adventurer_party()
@@ -167,6 +170,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_try_recruit_worker()
 	elif event.is_action_pressed("cycle_worker_focus"):
 		_cycle_worker_focus()
+	elif event.is_action_pressed("debug_spawn_adventurer"):
+		_spawn_debug_adventurer_party()
 	elif event.is_action_pressed("select"):
 		match active_tool:
 			ToolMode.DIG:
@@ -339,9 +344,10 @@ func _update_debug_label() -> void:
 	if adventurer_lines.is_empty():
 		adventurer_lines.append("Adventurer parties: 0")
 
-	debug_label.text = "Krebel's Keep Milestone 3A loaded\n%s\nResources: %s\nWorkers: %d\nWorker focus: %s (P)\nWorker economy: %s\nRecruit: R (%s)\nTool: %s\n%s\nTasks: %s\n%s\n%s\n%s" % [
+	debug_label.text = "Krebel's Keep Milestone 3B loaded\n%s\nResources: %s\n%s\nThreat test: V spawn adventurer party\nWorkers: %d\nWorker focus: %s (P)\nWorker economy: %s\nRecruit: R (%s)\nTool: %s\n%s\nTasks: %s\n%s\n%s\n%s" % [
 		access_message,
 		resource_manager.get_debug_text(),
+		_get_overlord_threat_text(),
 		workers.size(),
 		_get_worker_focus_name(worker_focus),
 		_get_worker_economy_text(),
@@ -378,18 +384,38 @@ func _spawn_worker_at(tile_position: Vector2i) -> RefCounted:
 func _spawn_initial_adventurer_party() -> void:
 	if not adventurer_parties.is_empty():
 		return
+	_spawn_adventurer_party()
+
+
+func _spawn_debug_adventurer_party() -> void:
+	var party := _spawn_adventurer_party()
+	if party == null:
+		return
+	if party.state == AdventurerPartyScript.PartyState.BLOCKED:
+		_update_debug_label()
+		queue_redraw()
+		return
+
+	last_message = "Spawned adventurer party %d with V" % party.id
+	print(last_message)
+	_update_debug_label()
+	queue_redraw()
+
+
+func _spawn_adventurer_party() -> RefCounted:
 	if dungeon.entrance_tiles.is_empty():
 		last_message = "Adventurer path blocked: no Entrance tile"
 		print(last_message)
-		return
+		return null
 
 	var party := AdventurerPartyScript.new()
-	party.id = 1
+	party.id = adventurer_parties.size() + 1
 	party.tile_position = dungeon.entrance_tiles[0]
 	party.world_position = _tile_center(party.tile_position)
 	party.target_tile = _find_adventurer_target_tile(party.tile_position)
 	adventurer_parties.append(party)
 	_plan_adventurer_path(party)
+	return party
 
 
 func _find_adventurer_target_tile(start_tile: Vector2i) -> Vector2i:
@@ -491,9 +517,27 @@ func _mark_adventurer_reached_target(party: RefCounted) -> void:
 	party.reached_target = true
 	party.path.clear()
 	party.state = AdventurerPartyScript.PartyState.REACHED_TARGET
-	last_message = "Adventurer party reached the Overlord room"
+	if not party.breached_overlord_room:
+		party.breached_overlord_room = true
+		overlord_hp = maxi(0, overlord_hp - 1)
+		if overlord_hp == 0:
+			overlord_loss_message = "Overlord defeated placeholder: dungeon would lose here"
+			last_message = overlord_loss_message
+		else:
+			last_message = "Adventurer party breached the Overlord room! Overlord HP: %d/%d" % [overlord_hp, OVERLORD_MAX_HP]
+	else:
+		last_message = "Adventurer party %d already breached the Overlord room" % party.id
 	print(last_message)
+	_update_debug_label()
 	queue_redraw()
+
+
+func _get_overlord_threat_text() -> String:
+	var threat_text := "Overlord HP: %d/%d" % [overlord_hp, OVERLORD_MAX_HP]
+	if overlord_loss_message != "":
+		threat_text += "\n%s" % overlord_loss_message
+
+	return threat_text
 
 
 func _try_recruit_worker() -> void:
@@ -1428,7 +1472,7 @@ func _get_adventurer_state_name(state: int) -> String:
 		AdventurerPartyScript.PartyState.MOVING:
 			return "Moving"
 		AdventurerPartyScript.PartyState.REACHED_TARGET:
-			return "ReachedTarget"
+			return "Breached"
 		AdventurerPartyScript.PartyState.BLOCKED:
 			return "Blocked"
 		_:

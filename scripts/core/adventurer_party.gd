@@ -15,3 +15,4 @@ var target_tile := Vector2i.ZERO
 var path: Array[Vector2i] = []
 var state: PartyState = PartyState.PATHING
 var reached_target := false
+var breached_overlord_room := false
