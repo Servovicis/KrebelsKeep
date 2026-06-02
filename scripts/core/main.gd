@@ -43,7 +43,7 @@ const COLOR_WORKER_DEPOSITING := Color("f3a35c")
 const COLOR_WORKER_BLOCKED := Color("d95f5f")
 const WORKER_SPEED_TILES_PER_SECOND := 4.0
 const DIG_WORK_REQUIRED := 2.0
-const SOURCE_GATHER_COOLDOWN := 5.0
+const EMPTY_SOURCE_RETRY_INTERVAL := 1.0
 # Extractors can work nearby permanent sources. Adjacency is optimal because it
 # minimizes worker travel, but it is not required.
 const EXTRACTOR_SOURCE_RANGE_TILES := 12
@@ -83,7 +83,6 @@ var construction_tasks: Array[RefCounted] = []
 var harvest_tasks: Array[RefCounted] = []
 var buildings: Dictionary = {}
 var harvest_buildings: Dictionary = {}
-var source_cooldowns: Dictionary = {}
 var next_task_id := 1
 var next_task_order := 1
 var last_message := "Ready"
@@ -98,7 +97,7 @@ func _ready() -> void:
 	access_valid = access_validator.is_overlord_room_connected(dungeon)
 	var access_message := "Access valid: Overlord room connected to outside" if access_valid else "Access invalid: Overlord room disconnected"
 
-	print("Krebel's Keep Milestone 2G loaded")
+	print("Krebel's Keep Milestone 2H loaded")
 	print(access_message)
 	_spawn_workers()
 	_update_debug_label()
@@ -117,7 +116,7 @@ func _process(delta: float) -> void:
 		camera.position += move_direction * CAMERA_SPEED * delta / camera.zoom.x
 
 	_update_workers(delta)
-	_update_resource_source_cooldowns(delta)
+	dungeon.update_resource_regeneration(delta)
 	_update_harvest_requests()
 	_update_debug_label()
 
@@ -297,7 +296,7 @@ func _update_debug_label() -> void:
 			worker_task_text,
 		])
 
-	debug_label.text = "Krebel's Keep Milestone 2G loaded\n%s\nResources: %s\nWorkers: %d\nRecruit: R (%s)\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
+	debug_label.text = "Krebel's Keep Milestone 2H loaded\n%s\nResources: %s\nWorkers: %d\nRecruit: R (%s)\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
 		access_message,
 		resource_manager.get_debug_text(),
 		workers.size(),
@@ -498,8 +497,28 @@ func _update_worker_gathering(worker: RefCounted, delta: float) -> void:
 
 	if task.status == HarvestTaskScript.TaskStatus.ASSIGNED:
 		task.status = HarvestTaskScript.TaskStatus.IN_PROGRESS
-		last_message = "Harvest task %d gathering at %s" % [task.id, str(task.source_tile)]
+
+	if not task.source_consumed:
+		if not dungeon.try_harvest_resource(task.source_tile, task.resource_amount):
+			task.gather_retry_wait = maxf(0.0, task.gather_retry_wait - delta)
+			if task.gather_retry_wait <= 0.0:
+				task.gather_retry_wait = EMPTY_SOURCE_RETRY_INTERVAL
+				last_message = _get_empty_source_wait_message(task)
+				print(last_message)
+				_update_debug_label()
+				queue_redraw()
+			return
+
+		task.source_consumed = true
+		task.gather_retry_wait = 0.0
+		last_message = "Harvest task %d gathering at %s (%d/%d available)" % [
+			task.id,
+			str(task.source_tile),
+			dungeon.get_resource_current_available(task.source_tile),
+			dungeon.get_resource_max_available(task.source_tile),
+		]
 		print(last_message)
+		queue_redraw()
 
 	task.gather_done += delta
 	if task.gather_done < task.gather_required:
@@ -508,7 +527,6 @@ func _update_worker_gathering(worker: RefCounted, delta: float) -> void:
 	task.carrying = true
 	worker.carried_resource = task.resource_type
 	worker.carried_amount = task.resource_amount
-	source_cooldowns[task.source_tile] = SOURCE_GATHER_COOLDOWN
 	var assignment := _find_reachable_interaction(worker.tile_position, task.building_tile)
 	if not assignment.reachable:
 		_clear_task_assignment(task)
@@ -635,14 +653,7 @@ func _register_production_building(tile_position: Vector2i, building_type: Build
 		"resource_amount": definition.production_amount,
 		"idle_message": "",
 	}
-	if not source_cooldowns.has(source_tile):
-		source_cooldowns[source_tile] = 0.0
 	last_message = "%s ready to harvest from %s" % [definition.short_name, str(source_tile)]
-
-
-func _update_resource_source_cooldowns(delta: float) -> void:
-	for source_tile in source_cooldowns.keys():
-		source_cooldowns[source_tile] = maxf(0.0, float(source_cooldowns[source_tile]) - delta)
 
 
 func _update_harvest_requests() -> void:
@@ -661,11 +672,6 @@ func _update_harvest_requests() -> void:
 		harvest_data["source_tile"] = source_tile
 		harvest_data["idle_message"] = ""
 		harvest_buildings[building_tile] = harvest_data
-		if _has_active_harvest_task_for_source(source_tile):
-			continue
-		if float(source_cooldowns.get(source_tile, 0.0)) > 0.0:
-			continue
-
 		var task := HarvestTaskScript.new()
 		task.id = next_task_id
 		task.target_tile = source_tile
@@ -841,17 +847,6 @@ func _has_active_harvest_task_for_building(tile_position: Vector2i) -> bool:
 	return false
 
 
-func _has_active_harvest_task_for_source(tile_position: Vector2i) -> bool:
-	for task in harvest_tasks:
-		if task.source_tile != tile_position:
-			continue
-		if _is_finished_task(task):
-			continue
-		return true
-
-	return false
-
-
 func _report_extractor_idle(building_tile: Vector2i, harvest_data: Dictionary) -> void:
 	var idle_message := _get_extractor_idle_message(int(harvest_data["building_type"]))
 	if str(harvest_data.get("idle_message", "")) == idle_message:
@@ -871,6 +866,16 @@ func _get_extractor_idle_message(building_type: int) -> String:
 			return "Lumberyard idle: no reachable Root source"
 		_:
 			return "Extractor idle: no reachable source"
+
+
+func _get_empty_source_wait_message(task: RefCounted) -> String:
+	match task.building_type:
+		BuildingDefinitionScript.BuildingType.MINE_PLACEHOLDER:
+			return "Mine waiting: Ore source empty"
+		BuildingDefinitionScript.BuildingType.LUMBERYARD_PLACEHOLDER:
+			return "Lumberyard waiting: Root source regrowing"
+		_:
+			return "Extractor waiting: source empty"
 
 
 func _get_completed_barracks_tiles() -> Array[Vector2i]:
@@ -1065,8 +1070,10 @@ func _clear_task_assignment(task: RefCounted) -> void:
 	if _is_harvest_task(task):
 		task.building_interaction_tile = Vector2i(-1, -1)
 		task.gather_done = 0.0
+		task.gather_retry_wait = 0.0
 		task.deposit_done = 0.0
 		task.carrying = false
+		task.source_consumed = false
 
 
 func _clear_worker_task(worker: RefCounted) -> void:
@@ -1276,6 +1283,8 @@ func _get_task_counts_text() -> String:
 
 
 func _get_debug_task_status_name(task: RefCounted) -> String:
+	if _is_harvest_task(task) and task.status == HarvestTaskScript.TaskStatus.IN_PROGRESS and not task.source_consumed and dungeon.is_resource_empty(task.source_tile):
+		return "HarvestWaitingForSource"
 	if _is_waiting_for_assignment(task):
 		if _can_any_worker_reach_task(task.target_tile):
 			return "%sQueued" % _get_task_action_name(task)
