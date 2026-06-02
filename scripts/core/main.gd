@@ -373,7 +373,7 @@ func _update_worker_work(worker: RefCounted, delta: float) -> void:
 	worker.task_id = -1
 	worker.state = WorkerAgentScript.WorkerState.IDLE
 	var access_validator := DungeonAccessValidatorScript.new()
-	access_valid = access_validator.is_overlord_room_connected(dungeon)
+	access_valid = access_validator.is_overlord_room_connected(dungeon, _get_access_blocked_tiles())
 	last_message = "%s task %d complete at %s" % [_get_task_action_name(task), task.id, str(task.target_tile)]
 	print("%s. Access valid: %s" % [last_message, str(access_valid)])
 	_update_pathfinder_blocked_tiles()
@@ -522,6 +522,8 @@ func _get_invalid_build_reason(tile_position: Vector2i, definition: RefCounted) 
 		return "Invalid build: tile already has a construction task"
 	if _has_building_at(tile_position):
 		return "Invalid build: tile already has a building"
+	if not _would_preserve_outside_access(tile_position):
+		return "Invalid placement: would block outside access"
 	if not resource_manager.can_afford(definition.cost):
 		return "Invalid build: insufficient resources for %s" % definition.display_name
 
@@ -556,6 +558,11 @@ func _has_active_construction_task(tile_position: Vector2i) -> bool:
 
 func _has_building_at(tile_position: Vector2i) -> bool:
 	return buildings.has(tile_position)
+
+
+func _would_preserve_outside_access(proposed_blocked_tile: Vector2i) -> bool:
+	var access_validator := DungeonAccessValidatorScript.new()
+	return access_validator.is_overlord_room_connected(dungeon, _get_access_blocked_tiles(proposed_blocked_tile))
 
 
 func _has_worker_at(tile_position: Vector2i) -> bool:
@@ -840,6 +847,10 @@ func _get_resource_name(resource_type: ResourceManagerScript.ResourceType) -> St
 
 
 func _update_pathfinder_blocked_tiles() -> void:
+	pathfinder.blocked_tiles = _get_access_blocked_tiles()
+
+
+func _get_access_blocked_tiles(extra_blocked_tile: Vector2i = Vector2i(-1, -1)) -> Dictionary:
 	var blocked_tiles: Dictionary = {}
 	for tile_position in buildings:
 		blocked_tiles[tile_position] = true
@@ -847,5 +858,7 @@ func _update_pathfinder_blocked_tiles() -> void:
 		if task.status == ConstructionTaskScript.TaskStatus.COMPLETE or task.status == ConstructionTaskScript.TaskStatus.CANCELED:
 			continue
 		blocked_tiles[task.target_tile] = true
+	if dungeon != null and dungeon.is_in_bounds(extra_blocked_tile):
+		blocked_tiles[extra_blocked_tile] = true
 
-	pathfinder.blocked_tiles = blocked_tiles
+	return blocked_tiles

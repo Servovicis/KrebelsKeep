@@ -10,8 +10,8 @@ const CARDINAL_DIRECTIONS: Array[Vector2i] = [
 ]
 
 
-func is_overlord_room_connected(dungeon: RefCounted) -> bool:
-	var reachable := _find_reachable_tiles(dungeon)
+func is_overlord_room_connected(dungeon: RefCounted, blocked_tiles: Dictionary = {}) -> bool:
+	var reachable := _find_reachable_tiles(dungeon, blocked_tiles)
 
 	for y in range(dungeon.overlord_room.position.y, dungeon.overlord_room.end.y):
 		for x in range(dungeon.overlord_room.position.x, dungeon.overlord_room.end.x):
@@ -22,12 +22,12 @@ func is_overlord_room_connected(dungeon: RefCounted) -> bool:
 	return false
 
 
-func _find_reachable_tiles(dungeon: RefCounted) -> Dictionary:
+func _find_reachable_tiles(dungeon: RefCounted, blocked_tiles: Dictionary) -> Dictionary:
 	var reachable: Dictionary = {}
 	var frontier: Array[Vector2i] = []
 
 	for entrance_tile in dungeon.entrance_tiles:
-		if _can_access(dungeon, entrance_tile):
+		if _can_access(dungeon, entrance_tile, blocked_tiles):
 			frontier.append(entrance_tile)
 			reachable[entrance_tile] = true
 
@@ -38,7 +38,7 @@ func _find_reachable_tiles(dungeon: RefCounted) -> Dictionary:
 
 		for direction in CARDINAL_DIRECTIONS:
 			var next_tile := current + direction
-			if reachable.has(next_tile) or not _can_access(dungeon, next_tile):
+			if reachable.has(next_tile) or not _can_access(dungeon, next_tile, blocked_tiles):
 				continue
 
 			reachable[next_tile] = true
@@ -47,8 +47,10 @@ func _find_reachable_tiles(dungeon: RefCounted) -> Dictionary:
 	return reachable
 
 
-func _can_access(dungeon: RefCounted, position: Vector2i) -> bool:
+func _can_access(dungeon: RefCounted, position: Vector2i, blocked_tiles: Dictionary) -> bool:
 	if not dungeon.is_in_bounds(position):
+		return false
+	if blocked_tiles.has(position):
 		return false
 
 	var tile_type: int = dungeon.get_tile(position)
