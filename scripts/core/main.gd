@@ -48,6 +48,8 @@ const COLOR_ADVENTURER_BLOCKED := Color("d95f5f")
 const WORKER_SPEED_TILES_PER_SECOND := 4.0
 const ADVENTURER_SPEED_TILES_PER_SECOND := 3.0
 const OVERLORD_MAX_HP := 3
+const FIRST_WAVE_DELAY_SECONDS := 20.0
+const WAVE_INTERVAL_SECONDS := 30.0
 const DIG_WORK_REQUIRED := 2.0
 const EMPTY_SOURCE_RETRY_INTERVAL := 1.0
 # Extractors can work nearby permanent sources. Adjacency is optimal because it
@@ -101,6 +103,9 @@ var buildings: Dictionary = {}
 var harvest_buildings: Dictionary = {}
 var overlord_hp := OVERLORD_MAX_HP
 var overlord_loss_message := ""
+var current_wave := 0
+var time_until_next_wave := FIRST_WAVE_DELAY_SECONDS
+var total_spawned_parties := 0
 var next_task_id := 1
 var next_task_order := 1
 var last_message := "Ready"
@@ -115,10 +120,9 @@ func _ready() -> void:
 	access_valid = access_validator.is_overlord_room_connected(dungeon)
 	var access_message := "Access valid: Overlord room connected to outside" if access_valid else "Access invalid: Overlord room disconnected"
 
-	print("Krebel's Keep Milestone 3B loaded")
+	print("Krebel's Keep Milestone 3C loaded")
 	print(access_message)
 	_spawn_workers()
-	_spawn_initial_adventurer_party()
 	_update_debug_label()
 	queue_redraw()
 
@@ -135,6 +139,7 @@ func _process(delta: float) -> void:
 		camera.position += move_direction * CAMERA_SPEED * delta / camera.zoom.x
 
 	_update_workers(delta)
+	_update_wave_timer(delta)
 	_update_adventurer_parties(delta)
 	dungeon.update_resource_regeneration(delta)
 	_update_harvest_requests()
@@ -344,10 +349,11 @@ func _update_debug_label() -> void:
 	if adventurer_lines.is_empty():
 		adventurer_lines.append("Adventurer parties: 0")
 
-	debug_label.text = "Krebel's Keep Milestone 3B loaded\n%s\nResources: %s\n%s\nThreat test: V spawn adventurer party\nWorkers: %d\nWorker focus: %s (P)\nWorker economy: %s\nRecruit: R (%s)\nTool: %s\n%s\nTasks: %s\n%s\n%s\n%s" % [
+	debug_label.text = "Krebel's Keep Milestone 3C loaded\n%s\nResources: %s\n%s\n%s\nThreat test: V spawn adventurer party\nWorkers: %d\nWorker focus: %s (P)\nWorker economy: %s\nRecruit: R (%s)\nTool: %s\n%s\nTasks: %s\n%s\n%s\n%s" % [
 		access_message,
 		resource_manager.get_debug_text(),
 		_get_overlord_threat_text(),
+		_get_wave_text(),
 		workers.size(),
 		_get_worker_focus_name(worker_focus),
 		_get_worker_economy_text(),
@@ -381,12 +387,6 @@ func _spawn_worker_at(tile_position: Vector2i) -> RefCounted:
 	return worker
 
 
-func _spawn_initial_adventurer_party() -> void:
-	if not adventurer_parties.is_empty():
-		return
-	_spawn_adventurer_party()
-
-
 func _spawn_debug_adventurer_party() -> void:
 	var party := _spawn_adventurer_party()
 	if party == null:
@@ -397,6 +397,35 @@ func _spawn_debug_adventurer_party() -> void:
 		return
 
 	last_message = "Spawned adventurer party %d with V" % party.id
+	print(last_message)
+	_update_debug_label()
+	queue_redraw()
+
+
+func _update_wave_timer(delta: float) -> void:
+	if overlord_hp <= 0:
+		return
+
+	time_until_next_wave = maxf(0.0, time_until_next_wave - delta)
+	if time_until_next_wave > 0.0:
+		return
+
+	_spawn_next_wave()
+
+
+func _spawn_next_wave() -> void:
+	current_wave += 1
+	time_until_next_wave = WAVE_INTERVAL_SECONDS
+	var party := _spawn_adventurer_party()
+	if party == null:
+		return
+
+	if party.state == AdventurerPartyScript.PartyState.BLOCKED:
+		_update_debug_label()
+		queue_redraw()
+		return
+
+	last_message = "Wave %d spawned adventurer party %d" % [current_wave, party.id]
 	print(last_message)
 	_update_debug_label()
 	queue_redraw()
@@ -414,6 +443,7 @@ func _spawn_adventurer_party() -> RefCounted:
 	party.world_position = _tile_center(party.tile_position)
 	party.target_tile = _find_adventurer_target_tile(party.tile_position)
 	adventurer_parties.append(party)
+	total_spawned_parties += 1
 	_plan_adventurer_path(party)
 	return party
 
@@ -538,6 +568,45 @@ func _get_overlord_threat_text() -> String:
 		threat_text += "\n%s" % overlord_loss_message
 
 	return threat_text
+
+
+func _get_wave_text() -> String:
+	var active_count := _get_active_adventurer_party_count()
+	var resolved_count := _get_resolved_adventurer_party_count()
+	var timer_text := "Waves stopped: Overlord HP is 0"
+	if overlord_hp > 0:
+		timer_text = "Wave %d incoming in %.1fs" % [current_wave + 1, time_until_next_wave]
+		if current_wave > 0:
+			timer_text = "Next wave %d in %.1fs" % [current_wave + 1, time_until_next_wave]
+
+	return "Wave: %d\n%s\nAdventurer parties: active %d, resolved %d, total spawned %d" % [
+		current_wave,
+		timer_text,
+		active_count,
+		resolved_count,
+		total_spawned_parties,
+	]
+
+
+func _get_active_adventurer_party_count() -> int:
+	var count := 0
+	for party in adventurer_parties:
+		if party.reached_target:
+			continue
+		if party.state == AdventurerPartyScript.PartyState.BLOCKED:
+			continue
+		count += 1
+
+	return count
+
+
+func _get_resolved_adventurer_party_count() -> int:
+	var count := 0
+	for party in adventurer_parties:
+		if party.reached_target or party.state == AdventurerPartyScript.PartyState.BLOCKED:
+			count += 1
+
+	return count
 
 
 func _try_recruit_worker() -> void:

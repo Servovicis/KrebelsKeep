@@ -2,7 +2,7 @@
 
 Krebel's Keep is a 2D top-down tile-based dungeon builder/defense sim prototype.
 
-## Milestone 3B Overlord Threat Stub
+## Milestone 3C Adventurer Wave Timing Stub
 
 - Godot version: 4.6.3
 - Language: GDScript
@@ -15,31 +15,34 @@ Krebel's Keep is a 2D top-down tile-based dungeon builder/defense sim prototype.
 2. Import/open this project folder.
 3. Press Run Project or open and run `scenes/main/Main.tscn`.
 
-## Adventurer Threat Prototype
+## Adventurer Wave Prototype
 
-Milestone 3B keeps the non-combat invasion-side movement stub. One
-placeholder adventurer party spawns automatically at the Entrance and paths
-cardinally through reachable Floor and Entrance tiles toward the Overlord room.
-The marker is intentionally placeholder-only and distinct from workers.
+Milestone 3C adds a simple timed non-combat adventurer wave stub. The first
+timed wave starts after 20 seconds, subsequent waves start every 30 seconds,
+and each wave currently spawns one placeholder adventurer party at the Entrance.
+Spawned parties path cardinally through reachable Floor and Entrance tiles
+toward the Overlord room. The marker is intentionally placeholder-only and
+distinct from workers.
 
 The Overlord starts with 3 HP. When an adventurer party reaches the Overlord
 room, the party breaches once, stops there, and reduces Overlord HP by 1. If HP
 reaches 0, the game shows `Overlord defeated placeholder: dungeon would lose
 here`. This is only a placeholder loss message; the game does not restart or
-reset automatically.
+reset automatically. Timed waves stop after the Overlord HP reaches 0.
 
 Press `V` to spawn another debug adventurer party from the Entrance. This is a
-manual test hook for reducing Overlord HP to 0, not an adventurer wave system.
+manual test hook for reducing Overlord HP to 0 and remains available alongside
+the timed wave stub.
 
 If no route is available, debug output reports
 `Adventurer path blocked: no route to Overlord room`.
 
-Combat, defenders, waves, traps, doors, loot, damage systems, and full loss
-screens are future milestones.
+Combat, defenders, traps, doors, loot, gold rewards, varied wave composition,
+damage systems, and full loss screens are future milestones.
 
 ## Resource Extraction And Recruitment Prototype
 
-Milestone 3B keeps the worker trip prototype and lets Mine/Lumberyard extractors
+Milestone 3C keeps the worker trip prototype and lets Mine/Lumberyard extractors
 use reachable nearby permanent sources instead of requiring direct adjacency.
 Completed extractor buildings request harvest work from the shortest reachable
 matching source within a small cardinal path range. A worker travels to the
@@ -82,22 +85,24 @@ future work.
 
 ## Validation
 
-Milestone 3B is valid when:
+Milestone 3C is valid when:
 
 - The project opens in Godot 4.6.3.
 - The main scene runs.
 - A fixed 128x128 dungeon grid is visible.
 - Solid rock, floor, boundary wall, entrance, and Overlord room tiles are visually distinct.
 - The entrance is near the south-center edge and connects by cardinal floor path to the north-center 5x5 Overlord room.
-- The debug label says `Krebel's Keep Milestone 3B loaded` and shows the hovered tile coordinate/type.
+- The debug label says `Krebel's Keep Milestone 3C loaded` and shows the hovered tile coordinate/type.
 - The debug label shows Overlord HP.
-- One adventurer party placeholder appears at or near the Entrance.
+- The debug label shows the current wave, countdown until the next wave, and active/resolved adventurer party counts.
+- The first timed wave spawns one adventurer party at or near the Entrance after 20 seconds.
 - The adventurer party moves cardinally through reachable Floor/Entrance tiles toward the Overlord room.
 - If its current route is blocked by a new building and another route exists, the party recalculates from its current tile.
 - Reaching the Overlord room logs an Overlord breach message and reduces Overlord HP by 1.
 - The same party does not repeatedly damage the Overlord every frame.
 - Pressing `V` spawns another debug adventurer party, allowing HP to reach 0.
 - HP 0 shows `Overlord defeated placeholder: dungeon would lose here`.
+- Timed waves stop after HP reaches 0.
 - Hovering a source shows its current/max availability, such as `Exposed Ore Source: 3/5 available`.
 - Camera movement works with WASD or arrow keys.
 - Zoom works with mouse wheel or `+` and `-`.
@@ -114,6 +119,6 @@ Milestone 3B is valid when:
 - Pressing `P` cycles worker focus through Balanced, Digging, Building, and Harvesting.
 - Worker focus makes idle workers prefer eligible tasks of that type without preventing fallback to other eligible work.
 - Ore and Root source tiles remain visible, open, permanent, and regenerating.
-- No worker assignment UI, general hauling, finite source depletion, doors, traps, combat, defenders, waves, loot, tech tree, or save/load behavior exists yet.
+- No worker assignment UI, general hauling, finite source depletion, doors, traps, combat, defenders, loot, gold rewards, varied wave composition, tech tree, or save/load behavior exists yet.
 
 Future milestones will add broader hauling/resource logistics.
