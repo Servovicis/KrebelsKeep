@@ -4,6 +4,9 @@ const DungeonAccessValidatorScript := preload("res://scripts/core/dungeon_access
 const DungeonMapScript := preload("res://scripts/core/dungeon_map.gd")
 const CardinalPathfinderScript := preload("res://scripts/core/cardinal_pathfinder.gd")
 const DigTaskScript := preload("res://scripts/core/dig_task.gd")
+const ResourceManagerScript := preload("res://scripts/core/resource_manager.gd")
+const BuildingDefinitionScript := preload("res://scripts/core/building_definition.gd")
+const ConstructionTaskScript := preload("res://scripts/core/construction_task.gd")
 const WorkerAgentScript := preload("res://scripts/core/worker_agent.gd")
 
 const TILE_SIZE := 32
@@ -21,6 +24,10 @@ const COLOR_GRID_MINOR := Color("2b333c")
 const COLOR_DIG_TASK := Color("d6b24a", 0.55)
 const COLOR_DIG_TASK_WAITING := Color("b9514f", 0.65)
 const COLOR_DIG_TASK_ASSIGNED := Color("6fb7ff", 0.55)
+const COLOR_CONSTRUCTION_TASK := Color("d99543", 0.68)
+const COLOR_CONSTRUCTION_TASK_ASSIGNED := Color("6cd4c8", 0.58)
+const COLOR_BARRACKS := Color("9d4f52")
+const COLOR_WORKSHOP := Color("507dba")
 const COLOR_WORKER_IDLE := Color("7bd88f")
 const COLOR_WORKER_MOVING := Color("6fb7ff")
 const COLOR_WORKER_WORKING := Color("f4d35e")
@@ -31,6 +38,8 @@ const DIG_WORK_REQUIRED := 2.0
 enum ToolMode {
 	SELECT,
 	DIG,
+	BUILD_BARRACKS,
+	BUILD_WORKSHOP,
 }
 
 @onready var camera: Camera2D = $Camera2D
@@ -38,11 +47,14 @@ enum ToolMode {
 
 var dungeon: RefCounted
 var pathfinder: RefCounted
+var resource_manager: RefCounted
 var access_valid := false
 var debug_visible := true
 var active_tool: ToolMode = ToolMode.SELECT
 var workers: Array[RefCounted] = []
 var dig_tasks: Array[RefCounted] = []
+var construction_tasks: Array[RefCounted] = []
+var buildings: Dictionary = {}
 var next_task_id := 1
 var next_task_order := 1
 var last_message := "Ready"
@@ -52,11 +64,12 @@ func _ready() -> void:
 	dungeon = DungeonMapScript.new()
 	dungeon.initialize_fixed_mvp()
 	pathfinder = CardinalPathfinderScript.new(dungeon)
+	resource_manager = ResourceManagerScript.new()
 	var access_validator := DungeonAccessValidatorScript.new()
 	access_valid = access_validator.is_overlord_room_connected(dungeon)
 	var access_message := "Access valid: Overlord room connected to outside" if access_valid else "Access invalid: Overlord room disconnected"
 
-	print("Krebel's Keep Milestone 1D loaded")
+	print("Krebel's Keep Milestone 2A loaded")
 	print(access_message)
 	_spawn_workers()
 	_update_debug_label()
@@ -87,8 +100,22 @@ func _unhandled_input(event: InputEvent) -> void:
 		active_tool = ToolMode.DIG if active_tool != ToolMode.DIG else ToolMode.SELECT
 		last_message = "Dig tool active" if active_tool == ToolMode.DIG else "Select tool active"
 		_update_debug_label()
-	elif event.is_action_pressed("select") and active_tool == ToolMode.DIG:
-		_try_create_dig_task(_get_hovered_tile())
+	elif event.is_action_pressed("tool_build_barracks"):
+		active_tool = ToolMode.BUILD_BARRACKS if active_tool != ToolMode.BUILD_BARRACKS else ToolMode.SELECT
+		last_message = "Build Barracks active" if active_tool == ToolMode.BUILD_BARRACKS else "Select tool active"
+		_update_debug_label()
+	elif event.is_action_pressed("tool_build_workshop"):
+		active_tool = ToolMode.BUILD_WORKSHOP if active_tool != ToolMode.BUILD_WORKSHOP else ToolMode.SELECT
+		last_message = "Build Workshop active" if active_tool == ToolMode.BUILD_WORKSHOP else "Select tool active"
+		_update_debug_label()
+	elif event.is_action_pressed("select"):
+		match active_tool:
+			ToolMode.DIG:
+				_try_create_dig_task(_get_hovered_tile())
+			ToolMode.BUILD_BARRACKS:
+				_try_create_construction_task(_get_hovered_tile(), BuildingDefinitionScript.BuildingType.BARRACKS_PLACEHOLDER)
+			ToolMode.BUILD_WORKSHOP:
+				_try_create_construction_task(_get_hovered_tile(), BuildingDefinitionScript.BuildingType.WORKSHOP_PLACEHOLDER)
 	elif event.is_action_pressed("cancel"):
 		if active_tool == ToolMode.DIG and _try_cancel_dig_task(_get_hovered_tile()):
 			return
@@ -131,6 +158,20 @@ func _draw() -> void:
 		draw_rect(task_rect.grow(-5.0), task_color, true)
 		draw_rect(task_rect.grow(-5.0), Color("f7e2a1"), false, 2.0)
 
+	for task in construction_tasks:
+		if task.status == ConstructionTaskScript.TaskStatus.COMPLETE or task.status == ConstructionTaskScript.TaskStatus.CANCELED:
+			continue
+		var task_rect := Rect2(Vector2(task.target_tile * TILE_SIZE), Vector2(TILE_SIZE, TILE_SIZE))
+		var task_color := COLOR_CONSTRUCTION_TASK_ASSIGNED if task.status == ConstructionTaskScript.TaskStatus.ASSIGNED or task.status == ConstructionTaskScript.TaskStatus.IN_PROGRESS else COLOR_CONSTRUCTION_TASK
+		draw_rect(task_rect.grow(-4.0), task_color, true)
+		draw_rect(task_rect.grow(-4.0), Color("ffe0a1"), false, 2.0)
+
+	for tile_position in buildings:
+		var building_rect := Rect2(Vector2(tile_position * TILE_SIZE), Vector2(TILE_SIZE, TILE_SIZE))
+		var building_type: int = int(buildings[tile_position])
+		draw_rect(building_rect.grow(-3.0), _get_building_color(building_type), true)
+		draw_rect(building_rect.grow(-3.0), Color("101318"), false, 2.0)
+
 	for worker in workers:
 		var worker_color := _get_worker_color(worker.state)
 		draw_circle(worker.world_position, TILE_SIZE * 0.28, worker_color)
@@ -172,15 +213,20 @@ func _update_debug_label() -> void:
 	var task_counts := _get_task_counts_text()
 	var worker_lines: Array[String] = []
 	for worker in workers:
+		var worker_task := _get_task_by_id(worker.task_id)
+		var worker_task_text := "-"
+		if worker_task != null:
+			worker_task_text = "%s %d" % [_get_task_action_name(worker_task), worker_task.id]
 		worker_lines.append("Worker %d: %s tile %s task %s" % [
 			worker.id,
 			_get_worker_state_name(worker.state),
 			str(worker.tile_position),
-			"-" if worker.task_id == -1 else str(worker.task_id),
+			worker_task_text,
 		])
 
-	debug_label.text = "Krebel's Keep - Milestone 1D loaded\n%s\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
+	debug_label.text = "Krebel's Keep - Milestone 2A loaded\n%s\nResources: %s\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
 		access_message,
+		resource_manager.get_debug_text(),
 		_get_tool_name(active_tool),
 		hover_text,
 		task_counts,
@@ -218,7 +264,7 @@ func _update_workers(delta: float) -> void:
 
 
 func _assign_next_task(worker: RefCounted) -> void:
-	for task in dig_tasks:
+	for task in _get_assignable_tasks():
 		if not _is_waiting_for_assignment(task):
 			continue
 
@@ -232,7 +278,7 @@ func _assign_next_task(worker: RefCounted) -> void:
 		worker.task_id = task.id
 		worker.path = assignment.path
 		worker.state = WorkerAgentScript.WorkerState.WORKING if worker.path.is_empty() else WorkerAgentScript.WorkerState.MOVING_TO_TASK
-		last_message = "Dig task %d assigned to worker %d" % [task.id, worker.id]
+		last_message = "%s task %d assigned to worker %d" % [_get_task_action_name(task), task.id, worker.id]
 		return
 
 
@@ -242,6 +288,21 @@ func _update_worker_movement(worker: RefCounted, delta: float) -> void:
 		return
 
 	var next_tile: Vector2i = worker.path[0]
+	if not pathfinder.is_passable_tile(next_tile):
+		var task := _get_task_by_id(worker.task_id)
+		if task != null and task.status == DigTaskScript.TaskStatus.ASSIGNED:
+			task.status = DigTaskScript.TaskStatus.PENDING
+			task.assigned_worker_id = -1
+			task.interaction_tile = Vector2i(-1, -1)
+
+		worker.task_id = -1
+		worker.path.clear()
+		worker.world_position = _tile_center(worker.tile_position)
+		worker.state = WorkerAgentScript.WorkerState.IDLE
+		last_message = "Worker %d path blocked, retrying assignment" % worker.id
+		queue_redraw()
+		return
+
 	var next_position := _tile_center(next_tile)
 	var max_distance := WORKER_SPEED_TILES_PER_SECOND * TILE_SIZE * delta
 	worker.world_position = worker.world_position.move_toward(next_position, max_distance)
@@ -264,20 +325,25 @@ func _update_worker_work(worker: RefCounted, delta: float) -> void:
 
 	if task.status == DigTaskScript.TaskStatus.ASSIGNED:
 		task.status = DigTaskScript.TaskStatus.IN_PROGRESS
-		last_message = "Dig task %d in progress" % task.id
+		last_message = "%s task %d in progress" % [_get_task_action_name(task), task.id]
 
 	task.work_done += delta
 	if task.work_done < task.work_required:
 		return
 
-	dungeon.set_tile(task.target_tile, DungeonMapScript.TileType.FLOOR)
+	if _is_construction_task(task):
+		buildings[task.target_tile] = task.building_type
+	else:
+		dungeon.set_tile(task.target_tile, DungeonMapScript.TileType.FLOOR)
+
 	task.status = DigTaskScript.TaskStatus.COMPLETE
 	worker.task_id = -1
 	worker.state = WorkerAgentScript.WorkerState.IDLE
 	var access_validator := DungeonAccessValidatorScript.new()
 	access_valid = access_validator.is_overlord_room_connected(dungeon)
-	last_message = "Dig task %d complete at %s" % [task.id, str(task.target_tile)]
+	last_message = "%s task %d complete at %s" % [_get_task_action_name(task), task.id, str(task.target_tile)]
 	print("%s. Access valid: %s" % [last_message, str(access_valid)])
+	_update_pathfinder_blocked_tiles()
 	_reconsider_moving_worker_paths()
 	queue_redraw()
 
@@ -306,6 +372,42 @@ func _try_create_dig_task(tile_position: Vector2i) -> void:
 	queue_redraw()
 
 
+func _try_create_construction_task(tile_position: Vector2i, building_type: BuildingDefinitionScript.BuildingType) -> void:
+	var definition := BuildingDefinitionScript.new()
+	definition.configure(building_type)
+	var invalid_reason := _get_invalid_build_reason(tile_position, definition)
+	if invalid_reason != "":
+		last_message = invalid_reason
+		print(last_message)
+		_update_debug_label()
+		return
+
+	if not resource_manager.spend(definition.cost):
+		last_message = "Invalid build: insufficient resources for %s" % definition.display_name
+		print(last_message)
+		_update_debug_label()
+		return
+
+	var task := ConstructionTaskScript.new()
+	task.id = next_task_id
+	task.target_tile = tile_position
+	task.created_order = next_task_order
+	task.building_type = building_type
+	task.work_required = definition.build_time
+	next_task_id += 1
+	next_task_order += 1
+	construction_tasks.append(task)
+	_update_pathfinder_blocked_tiles()
+
+	if _can_any_worker_reach_task(tile_position):
+		last_message = "Queued %s construction task %d at %s" % [definition.display_name, task.id, str(tile_position)]
+	else:
+		last_message = "Queued %s construction task %d at %s, waiting for access" % [definition.display_name, task.id, str(tile_position)]
+	print(last_message)
+	_update_debug_label()
+	queue_redraw()
+
+
 func _get_invalid_dig_reason(tile_position: Vector2i) -> String:
 	if not dungeon.is_in_bounds(tile_position):
 		return "Invalid dig: outside map"
@@ -317,6 +419,35 @@ func _get_invalid_dig_reason(tile_position: Vector2i) -> String:
 		return "Invalid dig: target must be SolidRock"
 	if _has_active_dig_task(tile_position):
 		return "Invalid dig: tile already has a dig task"
+	if _has_building_at(tile_position) or _has_active_construction_task(tile_position):
+		return "Invalid dig: tile already has a building task"
+
+	return ""
+
+
+func _get_invalid_build_reason(tile_position: Vector2i, definition: RefCounted) -> String:
+	if not dungeon.is_in_bounds(tile_position):
+		return "Invalid build: outside map"
+
+	var tile_type: int = dungeon.get_tile(tile_position)
+	if tile_type == DungeonMapScript.TileType.SOLID_ROCK:
+		return "Invalid build: target must be Floor"
+	if tile_type == DungeonMapScript.TileType.BOUNDARY_WALL:
+		return "Invalid build: boundary wall"
+	if tile_type == DungeonMapScript.TileType.ENTRANCE:
+		return "Invalid build: entrance tile"
+	if tile_type != DungeonMapScript.TileType.FLOOR:
+		return "Invalid build: target must be Floor"
+	if _has_active_dig_task(tile_position):
+		return "Invalid build: tile has an active dig task"
+	if _has_active_construction_task(tile_position):
+		return "Invalid build: tile already has a construction task"
+	if _has_building_at(tile_position):
+		return "Invalid build: tile already has a building"
+	if _has_worker_at(tile_position):
+		return "Invalid build: tile occupied by worker"
+	if not resource_manager.can_afford(definition.cost):
+		return "Invalid build: insufficient resources for %s" % definition.display_name
 
 	return ""
 
@@ -334,6 +465,29 @@ func _get_active_dig_task_at(tile_position: Vector2i) -> RefCounted:
 		return task
 
 	return null
+
+
+func _has_active_construction_task(tile_position: Vector2i) -> bool:
+	for task in construction_tasks:
+		if task.target_tile != tile_position:
+			continue
+		if task.status == ConstructionTaskScript.TaskStatus.COMPLETE or task.status == ConstructionTaskScript.TaskStatus.CANCELED:
+			continue
+		return true
+
+	return false
+
+
+func _has_building_at(tile_position: Vector2i) -> bool:
+	return buildings.has(tile_position)
+
+
+func _has_worker_at(tile_position: Vector2i) -> bool:
+	for worker in workers:
+		if worker.tile_position == tile_position:
+			return true
+
+	return false
 
 
 func _try_cancel_dig_task(tile_position: Vector2i) -> bool:
@@ -384,6 +538,19 @@ func _is_waiting_for_assignment(task: RefCounted) -> bool:
 	return task.status == DigTaskScript.TaskStatus.PENDING or task.status == DigTaskScript.TaskStatus.BLOCKED
 
 
+func _get_assignable_tasks() -> Array[RefCounted]:
+	var tasks: Array[RefCounted] = []
+	for task in dig_tasks:
+		tasks.append(task)
+	for task in construction_tasks:
+		tasks.append(task)
+
+	tasks.sort_custom(func(a: RefCounted, b: RefCounted) -> bool:
+		return a.created_order < b.created_order
+	)
+	return tasks
+
+
 func _can_any_worker_reach_task(target_tile: Vector2i) -> bool:
 	for worker in workers:
 		var assignment := _find_reachable_interaction(worker.tile_position, target_tile)
@@ -399,6 +566,9 @@ func _find_reachable_interaction(start_tile: Vector2i, target_tile: Vector2i) ->
 
 func _get_task_by_id(task_id: int) -> RefCounted:
 	for task in dig_tasks:
+		if task.id == task_id:
+			return task
+	for task in construction_tasks:
 		if task.id == task_id:
 			return task
 
@@ -430,7 +600,7 @@ func _reconsider_moving_worker_paths() -> void:
 
 		task.interaction_tile = assignment.interaction_tile
 		worker.path = assignment.path
-		print("Worker %d switched to shorter path for dig task %d" % [worker.id, task.id])
+		print("Worker %d switched to shorter path for %s task %d" % [worker.id, _get_task_action_name(task), task.id])
 
 
 func _get_hovered_tile() -> Vector2i:
@@ -507,13 +677,17 @@ func _get_tool_name(tool: ToolMode) -> String:
 			return "Select"
 		ToolMode.DIG:
 			return "Dig"
+		ToolMode.BUILD_BARRACKS:
+			return "Build Barracks"
+		ToolMode.BUILD_WORKSHOP:
+			return "Build Workshop"
 		_:
 			return "Unknown"
 
 
 func _get_task_counts_text() -> String:
 	var counts: Dictionary = {}
-	for task in dig_tasks:
+	for task in _get_assignable_tasks():
 		var status_name := _get_debug_task_status_name(task)
 		counts[status_name] = int(counts.get(status_name, 0)) + 1
 
@@ -531,7 +705,40 @@ func _get_task_counts_text() -> String:
 func _get_debug_task_status_name(task: RefCounted) -> String:
 	if _is_waiting_for_assignment(task):
 		if _can_any_worker_reach_task(task.target_tile):
-			return "Queued"
-		return "WaitingForAccess"
+			return "%sQueued" % _get_task_action_name(task)
+		return "%sWaitingForAccess" % _get_task_action_name(task)
 
-	return _get_task_status_name(task.status)
+	return "%s%s" % [_get_task_action_name(task), _get_task_status_name(task.status)]
+
+
+func _get_task_action_name(task: RefCounted) -> String:
+	if _is_construction_task(task):
+		return "Build"
+
+	return "Dig"
+
+
+func _is_construction_task(task: RefCounted) -> bool:
+	return task != null and task.get_script() == ConstructionTaskScript
+
+
+func _get_building_color(building_type: int) -> Color:
+	match building_type:
+		BuildingDefinitionScript.BuildingType.BARRACKS_PLACEHOLDER:
+			return COLOR_BARRACKS
+		BuildingDefinitionScript.BuildingType.WORKSHOP_PLACEHOLDER:
+			return COLOR_WORKSHOP
+		_:
+			return Color.MAGENTA
+
+
+func _update_pathfinder_blocked_tiles() -> void:
+	var blocked_tiles: Dictionary = {}
+	for tile_position in buildings:
+		blocked_tiles[tile_position] = true
+	for task in construction_tasks:
+		if task.status == ConstructionTaskScript.TaskStatus.COMPLETE or task.status == ConstructionTaskScript.TaskStatus.CANCELED:
+			continue
+		blocked_tiles[task.target_tile] = true
+
+	pathfinder.blocked_tiles = blocked_tiles

@@ -11,6 +11,7 @@ const CARDINAL_DIRECTIONS: Array[Vector2i] = [
 ]
 
 var dungeon: RefCounted
+var blocked_tiles: Dictionary = {}
 
 
 func _init(source_dungeon: RefCounted) -> void:
@@ -72,6 +73,8 @@ func get_cardinal_interaction_tiles(target_tile: Vector2i) -> Array[Vector2i]:
 
 func is_passable_tile(tile_position: Vector2i) -> bool:
 	if not dungeon.is_in_bounds(tile_position):
+		return false
+	if blocked_tiles.has(tile_position):
 		return false
 
 	var tile_type: int = dungeon.get_tile(tile_position)
