@@ -7,6 +7,7 @@ const DigTaskScript := preload("res://scripts/core/dig_task.gd")
 const ResourceManagerScript := preload("res://scripts/core/resource_manager.gd")
 const BuildingDefinitionScript := preload("res://scripts/core/building_definition.gd")
 const ConstructionTaskScript := preload("res://scripts/core/construction_task.gd")
+const HarvestTaskScript := preload("res://scripts/core/harvest_task.gd")
 const WorkerAgentScript := preload("res://scripts/core/worker_agent.gd")
 
 const TILE_SIZE := 32
@@ -28,6 +29,8 @@ const COLOR_DIG_TASK_WAITING := Color("b9514f", 0.65)
 const COLOR_DIG_TASK_ASSIGNED := Color("6fb7ff", 0.55)
 const COLOR_CONSTRUCTION_TASK := Color("d99543", 0.68)
 const COLOR_CONSTRUCTION_TASK_ASSIGNED := Color("6cd4c8", 0.58)
+const COLOR_HARVEST_TASK := Color("78b36d", 0.62)
+const COLOR_HARVEST_TASK_ASSIGNED := Color("b7d66a", 0.64)
 const COLOR_BARRACKS := Color("9d4f52")
 const COLOR_WORKSHOP := Color("507dba")
 const COLOR_LUMBERYARD := Color("4f9b5b")
@@ -35,9 +38,12 @@ const COLOR_MINE := Color("8b8f99")
 const COLOR_WORKER_IDLE := Color("7bd88f")
 const COLOR_WORKER_MOVING := Color("6fb7ff")
 const COLOR_WORKER_WORKING := Color("f4d35e")
+const COLOR_WORKER_HARVESTING := Color("b7d66a")
+const COLOR_WORKER_DEPOSITING := Color("f3a35c")
 const COLOR_WORKER_BLOCKED := Color("d95f5f")
 const WORKER_SPEED_TILES_PER_SECOND := 4.0
 const DIG_WORK_REQUIRED := 2.0
+const SOURCE_GATHER_COOLDOWN := 5.0
 const CARDINAL_DIRECTIONS: Array[Vector2i] = [
 	Vector2i.UP,
 	Vector2i.RIGHT,
@@ -66,8 +72,10 @@ var active_tool: ToolMode = ToolMode.SELECT
 var workers: Array[RefCounted] = []
 var dig_tasks: Array[RefCounted] = []
 var construction_tasks: Array[RefCounted] = []
+var harvest_tasks: Array[RefCounted] = []
 var buildings: Dictionary = {}
-var production_timers: Dictionary = {}
+var harvest_buildings: Dictionary = {}
+var source_cooldowns: Dictionary = {}
 var next_task_id := 1
 var next_task_order := 1
 var last_message := "Ready"
@@ -82,7 +90,7 @@ func _ready() -> void:
 	access_valid = access_validator.is_overlord_room_connected(dungeon)
 	var access_message := "Access valid: Overlord room connected to outside" if access_valid else "Access invalid: Overlord room disconnected"
 
-	print("Krebel's Keep Milestone 2D loaded")
+	print("Krebel's Keep Milestone 2E loaded")
 	print(access_message)
 	_spawn_workers()
 	_update_debug_label()
@@ -101,7 +109,8 @@ func _process(delta: float) -> void:
 		camera.position += move_direction * CAMERA_SPEED * delta / camera.zoom.x
 
 	_update_workers(delta)
-	_update_building_production(delta)
+	_update_resource_source_cooldowns(delta)
+	_update_harvest_requests()
 	_update_debug_label()
 
 
@@ -193,6 +202,13 @@ func _draw() -> void:
 		draw_rect(task_rect.grow(-4.0), task_color, true)
 		draw_rect(task_rect.grow(-4.0), Color("ffe0a1"), false, 2.0)
 
+	for task in harvest_tasks:
+		if task.status == HarvestTaskScript.TaskStatus.COMPLETE or task.status == HarvestTaskScript.TaskStatus.CANCELED:
+			continue
+		var task_rect := Rect2(Vector2(task.source_tile * TILE_SIZE), Vector2(TILE_SIZE, TILE_SIZE))
+		var task_color := COLOR_HARVEST_TASK_ASSIGNED if task.status == HarvestTaskScript.TaskStatus.ASSIGNED or task.status == HarvestTaskScript.TaskStatus.IN_PROGRESS else COLOR_HARVEST_TASK
+		draw_rect(task_rect.grow(-8.0), task_color, false, 3.0)
+
 	for tile_position in buildings:
 		var building_rect := Rect2(Vector2(tile_position * TILE_SIZE), Vector2(TILE_SIZE, TILE_SIZE))
 		var building_type: int = int(buildings[tile_position])
@@ -271,7 +287,7 @@ func _update_debug_label() -> void:
 			worker_task_text,
 		])
 
-	debug_label.text = "Krebel's Keep Milestone 2D loaded\n%s\nResources: %s\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
+	debug_label.text = "Krebel's Keep Milestone 2E loaded\n%s\nResources: %s\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
 		access_message,
 		resource_manager.get_debug_text(),
 		_get_tool_name(active_tool),
@@ -306,6 +322,14 @@ func _update_workers(delta: float) -> void:
 				_update_worker_movement(worker, delta)
 			WorkerAgentScript.WorkerState.WORKING:
 				_update_worker_work(worker, delta)
+			WorkerAgentScript.WorkerState.MOVING_TO_SOURCE:
+				_update_worker_movement(worker, delta)
+			WorkerAgentScript.WorkerState.GATHERING:
+				_update_worker_gathering(worker, delta)
+			WorkerAgentScript.WorkerState.RETURNING_TO_BUILDING:
+				_update_worker_movement(worker, delta)
+			WorkerAgentScript.WorkerState.DEPOSITING:
+				_update_worker_depositing(worker, delta)
 			WorkerAgentScript.WorkerState.BLOCKED:
 				_assign_next_task(worker)
 
@@ -328,28 +352,31 @@ func _assign_next_task(worker: RefCounted) -> void:
 		task.assigned_worker_id = worker.id
 		worker.task_id = task.id
 		worker.path = assignment.path
-		worker.state = WorkerAgentScript.WorkerState.WORKING if worker.path.is_empty() else WorkerAgentScript.WorkerState.MOVING_TO_TASK
+		if _is_harvest_task(task):
+			worker.state = WorkerAgentScript.WorkerState.GATHERING if worker.path.is_empty() else WorkerAgentScript.WorkerState.MOVING_TO_SOURCE
+		else:
+			worker.state = WorkerAgentScript.WorkerState.WORKING if worker.path.is_empty() else WorkerAgentScript.WorkerState.MOVING_TO_TASK
 		last_message = "%s task %d assigned to worker %d" % [_get_task_action_name(task), task.id, worker.id]
 		return
 
 
 func _update_worker_movement(worker: RefCounted, delta: float) -> void:
 	if worker.path.is_empty():
-		worker.state = WorkerAgentScript.WorkerState.WORKING
+		if worker.state == WorkerAgentScript.WorkerState.MOVING_TO_SOURCE:
+			worker.state = WorkerAgentScript.WorkerState.GATHERING
+		elif worker.state == WorkerAgentScript.WorkerState.RETURNING_TO_BUILDING:
+			worker.state = WorkerAgentScript.WorkerState.DEPOSITING
+		else:
+			worker.state = WorkerAgentScript.WorkerState.WORKING
 		return
 
 	var next_tile: Vector2i = worker.path[0]
 	if not pathfinder.is_passable_tile(next_tile):
 		var task := _get_task_by_id(worker.task_id)
-		if task != null and task.status == DigTaskScript.TaskStatus.ASSIGNED:
-			task.status = DigTaskScript.TaskStatus.PENDING
-			task.assigned_worker_id = -1
-			task.interaction_tile = Vector2i(-1, -1)
+		if task != null and (task.status == DigTaskScript.TaskStatus.ASSIGNED or _is_harvest_task(task)):
+			_clear_task_assignment(task)
 
-		worker.task_id = -1
-		worker.path.clear()
-		worker.world_position = _tile_center(worker.tile_position)
-		worker.state = WorkerAgentScript.WorkerState.IDLE
+		_clear_worker_task(worker)
 		last_message = "Worker %d path blocked, retrying assignment" % worker.id
 		queue_redraw()
 		return
@@ -362,7 +389,12 @@ func _update_worker_movement(worker: RefCounted, delta: float) -> void:
 		worker.tile_position = next_tile
 		worker.path.remove_at(0)
 		if worker.path.is_empty():
-			worker.state = WorkerAgentScript.WorkerState.WORKING
+			if worker.state == WorkerAgentScript.WorkerState.MOVING_TO_SOURCE:
+				worker.state = WorkerAgentScript.WorkerState.GATHERING
+			elif worker.state == WorkerAgentScript.WorkerState.RETURNING_TO_BUILDING:
+				worker.state = WorkerAgentScript.WorkerState.DEPOSITING
+			else:
+				worker.state = WorkerAgentScript.WorkerState.WORKING
 
 	queue_redraw()
 
@@ -407,6 +439,72 @@ func _update_worker_work(worker: RefCounted, delta: float) -> void:
 	print("%s. Access valid: %s" % [last_message, str(access_valid)])
 	_update_pathfinder_blocked_tiles()
 	_reconsider_moving_worker_paths()
+	queue_redraw()
+
+
+func _update_worker_gathering(worker: RefCounted, delta: float) -> void:
+	var task := _get_task_by_id(worker.task_id)
+	if task == null or not _is_harvest_task(task):
+		_clear_worker_task(worker)
+		return
+
+	if task.status == HarvestTaskScript.TaskStatus.ASSIGNED:
+		task.status = HarvestTaskScript.TaskStatus.IN_PROGRESS
+		last_message = "Harvest task %d gathering at %s" % [task.id, str(task.source_tile)]
+		print(last_message)
+
+	task.gather_done += delta
+	if task.gather_done < task.gather_required:
+		return
+
+	task.carrying = true
+	worker.carried_resource = task.resource_type
+	worker.carried_amount = task.resource_amount
+	source_cooldowns[task.source_tile] = SOURCE_GATHER_COOLDOWN
+	var assignment := _find_reachable_interaction(worker.tile_position, task.building_tile)
+	if not assignment.reachable:
+		_clear_task_assignment(task)
+		_clear_worker_task(worker)
+		last_message = "Harvest task %d waiting for building access" % task.id
+		print(last_message)
+		queue_redraw()
+		return
+
+	task.building_interaction_tile = assignment.interaction_tile
+	worker.path = assignment.path
+	worker.state = WorkerAgentScript.WorkerState.DEPOSITING if worker.path.is_empty() else WorkerAgentScript.WorkerState.RETURNING_TO_BUILDING
+	last_message = "Worker %d returning +%d %s to %s" % [
+		worker.id,
+		task.resource_amount,
+		_get_resource_name(task.resource_type),
+		str(task.building_tile),
+	]
+	print(last_message)
+	queue_redraw()
+
+
+func _update_worker_depositing(worker: RefCounted, delta: float) -> void:
+	var task := _get_task_by_id(worker.task_id)
+	if task == null or not _is_harvest_task(task):
+		_clear_worker_task(worker)
+		return
+
+	task.deposit_done += delta
+	if task.deposit_done < task.deposit_required:
+		if task.deposit_done == delta:
+			last_message = "Harvest task %d depositing at %s" % [task.id, str(task.building_tile)]
+		return
+
+	resource_manager.add(task.resource_type, task.resource_amount)
+	task.status = HarvestTaskScript.TaskStatus.COMPLETE
+	last_message = "Harvest task %d deposited +%d %s" % [
+		task.id,
+		task.resource_amount,
+		_get_resource_name(task.resource_type),
+	]
+	print(last_message)
+	_clear_worker_task(worker)
+	_update_debug_label()
 	queue_redraw()
 
 
@@ -476,48 +574,60 @@ func _register_production_building(tile_position: Vector2i, building_type: Build
 	if not definition.produces_resource:
 		return
 
-	# Temporary prototype: completed extractors passively produce resources.
-	# Future production should assign workers to travel between this building
-	# and a permanent regenerating source, gather from capped available output,
-	# return, and deposit Wood/Ore.
-	production_timers[tile_position] = 0.0
-
-
-func _update_building_production(delta: float) -> void:
-	if production_timers.is_empty():
+	var source_tile := _find_adjacent_resource_source(tile_position, _get_required_source_type(building_type))
+	if not dungeon.is_in_bounds(source_tile):
+		last_message = "%s complete but no adjacent source found" % definition.short_name
+		print(last_message)
 		return
 
-	var produced := false
-	for tile_position in production_timers.keys():
-		if not buildings.has(tile_position):
-			production_timers.erase(tile_position)
+	harvest_buildings[tile_position] = {
+		"building_type": building_type,
+		"source_tile": source_tile,
+		"resource_type": definition.production_resource,
+		"resource_amount": definition.production_amount,
+	}
+	if not source_cooldowns.has(source_tile):
+		source_cooldowns[source_tile] = 0.0
+	last_message = "%s ready to harvest from %s" % [definition.short_name, str(source_tile)]
+
+
+func _update_resource_source_cooldowns(delta: float) -> void:
+	for source_tile in source_cooldowns.keys():
+		source_cooldowns[source_tile] = maxf(0.0, float(source_cooldowns[source_tile]) - delta)
+
+
+func _update_harvest_requests() -> void:
+	for building_tile in harvest_buildings.keys():
+		if not buildings.has(building_tile):
+			harvest_buildings.erase(building_tile)
+			continue
+		if _has_active_harvest_task_for_building(building_tile):
 			continue
 
-		var definition := BuildingDefinitionScript.new()
-		definition.configure(buildings[tile_position])
-		if not definition.produces_resource:
-			production_timers.erase(tile_position)
+		var harvest_data: Dictionary = harvest_buildings[building_tile]
+		var source_tile: Vector2i = harvest_data["source_tile"]
+		if not dungeon.is_in_bounds(source_tile):
+			continue
+		if _has_active_harvest_task_for_source(source_tile):
+			continue
+		if float(source_cooldowns.get(source_tile, 0.0)) > 0.0:
 			continue
 
-		var timer := float(production_timers[tile_position]) + delta
-		while timer >= definition.production_interval:
-			timer -= definition.production_interval
-			# No source depletion or regeneration timer exists yet. Mine and
-			# Lumberyard output is intentionally uncapped until source max
-			# available output and regeneration rates are modeled.
-			resource_manager.add(definition.production_resource, definition.production_amount)
-			last_message = "%s produced +%d %s" % [
-				definition.display_name,
-				definition.production_amount,
-				_get_resource_name(definition.production_resource),
-			]
-			print(last_message)
-			produced = true
-
-		production_timers[tile_position] = timer
-
-	if produced:
-		_update_debug_label()
+		var task := HarvestTaskScript.new()
+		task.id = next_task_id
+		task.target_tile = source_tile
+		task.source_tile = source_tile
+		task.building_tile = building_tile
+		task.created_order = next_task_order
+		task.building_type = harvest_data["building_type"]
+		task.resource_type = harvest_data["resource_type"]
+		task.resource_amount = int(harvest_data["resource_amount"])
+		next_task_id += 1
+		next_task_order += 1
+		harvest_tasks.append(task)
+		last_message = "Queued harvest task %d at %s" % [task.id, str(source_tile)]
+		print(last_message)
+		queue_redraw()
 
 
 func _get_invalid_dig_reason(tile_position: Vector2i) -> String:
@@ -573,11 +683,25 @@ func _get_invalid_build_reason(tile_position: Vector2i, definition: RefCounted) 
 
 
 func _has_adjacent_resource_source(tile_position: Vector2i, resource_node_type: int) -> bool:
+	return dungeon.is_in_bounds(_find_adjacent_resource_source(tile_position, resource_node_type))
+
+
+func _find_adjacent_resource_source(tile_position: Vector2i, resource_node_type: int) -> Vector2i:
 	for direction in CARDINAL_DIRECTIONS:
 		if dungeon.has_resource_node(tile_position + direction, resource_node_type):
-			return true
+			return tile_position + direction
 
-	return false
+	return Vector2i(-1, -1)
+
+
+func _get_required_source_type(building_type: int) -> int:
+	match building_type:
+		BuildingDefinitionScript.BuildingType.MINE_PLACEHOLDER:
+			return DungeonMapScript.ResourceNodeType.ORE
+		BuildingDefinitionScript.BuildingType.LUMBERYARD_PLACEHOLDER:
+			return DungeonMapScript.ResourceNodeType.ROOT
+		_:
+			return DungeonMapScript.ResourceNodeType.NONE
 
 
 func _has_active_dig_task(tile_position: Vector2i) -> bool:
@@ -608,6 +732,28 @@ func _has_active_construction_task(tile_position: Vector2i) -> bool:
 
 func _has_building_at(tile_position: Vector2i) -> bool:
 	return buildings.has(tile_position)
+
+
+func _has_active_harvest_task_for_building(tile_position: Vector2i) -> bool:
+	for task in harvest_tasks:
+		if task.building_tile != tile_position:
+			continue
+		if _is_finished_task(task):
+			continue
+		return true
+
+	return false
+
+
+func _has_active_harvest_task_for_source(tile_position: Vector2i) -> bool:
+	for task in harvest_tasks:
+		if task.source_tile != tile_position:
+			continue
+		if _is_finished_task(task):
+			continue
+		return true
+
+	return false
 
 
 func _would_preserve_outside_access(proposed_blocked_tile: Vector2i) -> bool:
@@ -666,6 +812,8 @@ func _try_cancel_dig_task(tile_position: Vector2i) -> bool:
 			assigned_worker.task_id = -1
 			assigned_worker.path.clear()
 			assigned_worker.world_position = _tile_center(assigned_worker.tile_position)
+			assigned_worker.carried_resource = -1
+			assigned_worker.carried_amount = 0
 			assigned_worker.state = WorkerAgentScript.WorkerState.IDLE
 
 	task.status = DigTaskScript.TaskStatus.CANCELED
@@ -682,14 +830,44 @@ func _is_waiting_for_assignment(task: RefCounted) -> bool:
 	return task.status == DigTaskScript.TaskStatus.PENDING or task.status == DigTaskScript.TaskStatus.BLOCKED
 
 
+func _clear_task_assignment(task: RefCounted) -> void:
+	task.status = DigTaskScript.TaskStatus.PENDING
+	task.assigned_worker_id = -1
+	task.interaction_tile = Vector2i(-1, -1)
+	if _is_harvest_task(task):
+		task.building_interaction_tile = Vector2i(-1, -1)
+		task.gather_done = 0.0
+		task.deposit_done = 0.0
+		task.carrying = false
+
+
+func _clear_worker_task(worker: RefCounted) -> void:
+	worker.task_id = -1
+	worker.path.clear()
+	worker.world_position = _tile_center(worker.tile_position)
+	worker.carried_resource = -1
+	worker.carried_amount = 0
+	worker.state = WorkerAgentScript.WorkerState.IDLE
+
+
 func _get_assignable_tasks() -> Array[RefCounted]:
 	var tasks: Array[RefCounted] = []
 	for task in dig_tasks:
+		if _is_finished_task(task):
+			continue
 		tasks.append(task)
 	for task in construction_tasks:
+		if _is_finished_task(task):
+			continue
+		tasks.append(task)
+	for task in harvest_tasks:
+		if _is_finished_task(task):
+			continue
 		tasks.append(task)
 
 	tasks.sort_custom(func(a: RefCounted, b: RefCounted) -> bool:
+		if _get_task_priority(a) != _get_task_priority(b):
+			return _get_task_priority(a) < _get_task_priority(b)
 		return a.created_order < b.created_order
 	)
 	return tasks
@@ -715,6 +893,9 @@ func _get_task_by_id(task_id: int) -> RefCounted:
 	for task in construction_tasks:
 		if task.id == task_id:
 			return task
+	for task in harvest_tasks:
+		if task.id == task_id:
+			return task
 
 	return null
 
@@ -729,7 +910,7 @@ func _get_worker_by_id(worker_id: int) -> RefCounted:
 
 func _reconsider_moving_worker_paths() -> void:
 	for worker in workers:
-		if worker.state != WorkerAgentScript.WorkerState.MOVING_TO_TASK:
+		if worker.state != WorkerAgentScript.WorkerState.MOVING_TO_TASK and worker.state != WorkerAgentScript.WorkerState.MOVING_TO_SOURCE:
 			continue
 		if not worker.world_position.is_equal_approx(_tile_center(worker.tile_position)):
 			continue
@@ -768,6 +949,14 @@ func _get_worker_color(state: int) -> Color:
 			return COLOR_WORKER_MOVING
 		WorkerAgentScript.WorkerState.WORKING:
 			return COLOR_WORKER_WORKING
+		WorkerAgentScript.WorkerState.MOVING_TO_SOURCE:
+			return COLOR_WORKER_MOVING
+		WorkerAgentScript.WorkerState.GATHERING:
+			return COLOR_WORKER_HARVESTING
+		WorkerAgentScript.WorkerState.RETURNING_TO_BUILDING:
+			return COLOR_WORKER_MOVING
+		WorkerAgentScript.WorkerState.DEPOSITING:
+			return COLOR_WORKER_DEPOSITING
 		WorkerAgentScript.WorkerState.BLOCKED:
 			return COLOR_WORKER_BLOCKED
 		_:
@@ -791,6 +980,14 @@ func _get_worker_state_name(state: int) -> String:
 			return "MovingToTask"
 		WorkerAgentScript.WorkerState.WORKING:
 			return "Working"
+		WorkerAgentScript.WorkerState.MOVING_TO_SOURCE:
+			return "MovingToSource"
+		WorkerAgentScript.WorkerState.GATHERING:
+			return "Gathering"
+		WorkerAgentScript.WorkerState.RETURNING_TO_BUILDING:
+			return "Returning"
+		WorkerAgentScript.WorkerState.DEPOSITING:
+			return "Depositing"
 		WorkerAgentScript.WorkerState.BLOCKED:
 			return "Blocked"
 		_:
@@ -862,12 +1059,29 @@ func _get_debug_task_status_name(task: RefCounted) -> String:
 func _get_task_action_name(task: RefCounted) -> String:
 	if _is_construction_task(task):
 		return "Build"
+	if _is_harvest_task(task):
+		return "Harvest"
 
 	return "Dig"
 
 
 func _is_construction_task(task: RefCounted) -> bool:
 	return task != null and task.get_script() == ConstructionTaskScript
+
+
+func _is_harvest_task(task: RefCounted) -> bool:
+	return task != null and task.get_script() == HarvestTaskScript
+
+
+func _is_finished_task(task: RefCounted) -> bool:
+	return task.status == DigTaskScript.TaskStatus.COMPLETE or task.status == DigTaskScript.TaskStatus.CANCELED
+
+
+func _get_task_priority(task: RefCounted) -> int:
+	if _is_harvest_task(task):
+		return 1
+
+	return 0
 
 
 func _get_building_color(building_type: int) -> Color:

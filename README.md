@@ -2,7 +2,7 @@
 
 Krebel's Keep is a 2D top-down tile-based dungeon builder/defense sim prototype.
 
-## Milestone 2D Regenerating Resource Source Semantics
+## Milestone 2E Worker Harvest Loop Prototype
 
 - Godot version: 4.6.3
 - Language: GDScript
@@ -17,9 +17,10 @@ Krebel's Keep is a 2D top-down tile-based dungeon builder/defense sim prototype.
 
 ## Resource Extraction Prototype
 
-Milestone 2D keeps completed Mines and Lumberyards passively producing Ore and
-Wood as a temporary prototype behavior. The intended extraction model is worker
-trips between extractor buildings and permanent regenerating resource sources.
+Milestone 2E replaces temporary passive Mine/Lumberyard production with a simple
+worker trip prototype. Completed extractor buildings request harvest work from
+their adjacent permanent source. A worker travels to the source, gathers briefly,
+returns to the building, and deposits Wood or Ore into the global resources.
 
 Ore and Root sources are not finite deposits. They are permanent dungeon
 features with future capped available output and regeneration rates. Root
@@ -31,23 +32,28 @@ Current fixed test sources are exposed on floor for easy validation. Later,
 players should usually dig to reach or expose resource sources instead of
 starting with every source pre-dug.
 
+Sources currently use a minimal cooldown-style availability gate. They are not
+deleted, consumed, or permanently depleted.
+
 ## Validation
 
-Milestone 2D is valid when:
+Milestone 2E is valid when:
 
 - The project opens in Godot 4.6.3.
 - The main scene runs.
 - A fixed 128x128 dungeon grid is visible.
 - Solid rock, floor, boundary wall, entrance, and Overlord room tiles are visually distinct.
 - The entrance is near the south-center edge and connects by cardinal floor path to the north-center 5x5 Overlord room.
-- The debug label says `Krebel's Keep Milestone 2D loaded` and shows the hovered tile coordinate/type.
+- The debug label says `Krebel's Keep Milestone 2E loaded` and shows the hovered tile coordinate/type.
 - Camera movement works with WASD or arrow keys.
 - Zoom works with mouse wheel or `+` and `-`.
 - Startup output reports `Access valid: Overlord room connected to outside`.
 - Mines require valid floor cardinal-adjacent to an exposed Ore source.
 - Lumberyards require valid floor cardinal-adjacent to an exposed Root source.
-- Completed Mines and Lumberyards still passively produce resources as a prototype.
-- No worker harvesting, hauling, source regeneration timers, source output accounting, doors, traps, adventurers, combat, waves, tech tree, or save/load behavior exists yet.
+- Completed Mines and Lumberyards create recurring worker harvest tasks instead of passive production.
+- Workers travel to the adjacent source, gather, return to the building, and deposit +1 Wood or +1 Ore.
+- Ore and Root source tiles remain visible, open, permanent, and undepleted.
+- No general hauling, source stock accounting, doors, traps, adventurers, combat, waves, tech tree, or save/load behavior exists yet.
 
-Future milestones will replace passive extractor production with worker trips,
-source output caps, and source regeneration.
+Future milestones will add source output caps, fuller regeneration, and broader
+hauling/resource logistics.

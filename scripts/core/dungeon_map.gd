@@ -18,6 +18,12 @@ const WIDTH := 128
 const HEIGHT := 128
 const ENTRANCE_TILE := Vector2i(64, 127)
 const OVERLORD_ROOM := Rect2i(62, 10, 5, 5)
+const CARDINAL_DIRECTIONS: Array[Vector2i] = [
+	Vector2i.UP,
+	Vector2i.RIGHT,
+	Vector2i.DOWN,
+	Vector2i.LEFT,
+]
 
 var size := Vector2i(WIDTH, HEIGHT)
 var tiles: Array[int] = []
@@ -144,14 +150,18 @@ func _carve_cardinal_path(start: Vector2i, target: Vector2i) -> void:
 
 
 func _place_fixed_resource_nodes() -> void:
-	# Milestone 2D exposes fixed test sources on floor so Mine/Lumberyard
-	# placement and prototype production are easy to validate. Later sources
+	# Milestone 2E exposes fixed test sources on floor so Mine/Lumberyard
+	# placement and worker harvest trips are easy to validate. Later sources
 	# should usually be reached or exposed by digging instead of all starting
 	# pre-dug.
 	_carve_cardinal_path(Vector2i(64, 92), Vector2i(60, 92))
 	_carve_cardinal_path(Vector2i(64, 84), Vector2i(59, 84))
 	_carve_cardinal_path(Vector2i(64, 70), Vector2i(68, 70))
 	_carve_cardinal_path(Vector2i(64, 62), Vector2i(69, 62))
+	_carve_source_pocket(Vector2i(60, 92))
+	_carve_source_pocket(Vector2i(59, 84))
+	_carve_source_pocket(Vector2i(68, 70))
+	_carve_source_pocket(Vector2i(69, 62))
 
 	# Sources are permanent. Roots regrow through dungeon magic; ore-rich
 	# sources replenish as dungeon magic slowly replaces ore.
@@ -163,3 +173,8 @@ func _place_fixed_resource_nodes() -> void:
 
 func _tile_index(position: Vector2i) -> int:
 	return position.y * size.x + position.x
+
+
+func _carve_source_pocket(source_tile: Vector2i) -> void:
+	for direction in CARDINAL_DIRECTIONS:
+		set_tile(source_tile + direction, TileType.FLOOR)
