@@ -47,6 +47,11 @@ const SOURCE_GATHER_COOLDOWN := 5.0
 # Extractors can work nearby permanent sources. Adjacency is optimal because it
 # minimizes worker travel, but it is not required.
 const EXTRACTOR_SOURCE_RANGE_TILES := 12
+const RECRUIT_WORKER_COST := {
+	ResourceManagerScript.ResourceType.WOOD: 20,
+	ResourceManagerScript.ResourceType.ORE: 10,
+	ResourceManagerScript.ResourceType.GOLD: 0,
+}
 const CARDINAL_DIRECTIONS: Array[Vector2i] = [
 	Vector2i.UP,
 	Vector2i.RIGHT,
@@ -93,7 +98,7 @@ func _ready() -> void:
 	access_valid = access_validator.is_overlord_room_connected(dungeon)
 	var access_message := "Access valid: Overlord room connected to outside" if access_valid else "Access invalid: Overlord room disconnected"
 
-	print("Krebel's Keep Milestone 2F loaded")
+	print("Krebel's Keep Milestone 2G loaded")
 	print(access_message)
 	_spawn_workers()
 	_update_debug_label()
@@ -142,6 +147,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		active_tool = ToolMode.BUILD_MINE if active_tool != ToolMode.BUILD_MINE else ToolMode.SELECT
 		last_message = "Build Mine active" if active_tool == ToolMode.BUILD_MINE else "Select tool active"
 		_update_debug_label()
+	elif event.is_action_pressed("recruit_worker"):
+		_try_recruit_worker()
 	elif event.is_action_pressed("select"):
 		match active_tool:
 			ToolMode.DIG:
@@ -290,9 +297,11 @@ func _update_debug_label() -> void:
 			worker_task_text,
 		])
 
-	debug_label.text = "Krebel's Keep Milestone 2F loaded\n%s\nResources: %s\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
+	debug_label.text = "Krebel's Keep Milestone 2G loaded\n%s\nResources: %s\nWorkers: %d\nRecruit: R (%s)\nTool: %s\n%s\nTasks: %s\n%s\n%s" % [
 		access_message,
 		resource_manager.get_debug_text(),
+		workers.size(),
+		_get_cost_debug_text(RECRUIT_WORKER_COST),
 		_get_tool_name(active_tool),
 		hover_text,
 		task_counts,
@@ -309,11 +318,47 @@ func _spawn_workers() -> void:
 
 	workers.clear()
 	for index in range(spawn_tiles.size()):
-		var worker := WorkerAgentScript.new()
-		worker.id = index + 1
-		worker.tile_position = spawn_tiles[index]
-		worker.world_position = _tile_center(worker.tile_position)
-		workers.append(worker)
+		_spawn_worker_at(spawn_tiles[index])
+
+
+func _spawn_worker_at(tile_position: Vector2i) -> RefCounted:
+	var worker := WorkerAgentScript.new()
+	worker.id = workers.size() + 1
+	worker.tile_position = tile_position
+	worker.world_position = _tile_center(worker.tile_position)
+	workers.append(worker)
+	return worker
+
+
+func _try_recruit_worker() -> void:
+	if _get_completed_barracks_tiles().is_empty():
+		last_message = "Recruit failed: completed BarracksPlaceholder required"
+		print(last_message)
+		_update_debug_label()
+		return
+
+	var spawn_tile := _find_worker_recruit_spawn_tile()
+	if not dungeon.is_in_bounds(spawn_tile):
+		last_message = "Recruit failed: no valid reachable Floor spawn tile"
+		print(last_message)
+		_update_debug_label()
+		return
+
+	if not resource_manager.spend(RECRUIT_WORKER_COST):
+		last_message = "Recruit failed: insufficient resources (%s)" % _get_cost_debug_text(RECRUIT_WORKER_COST)
+		print(last_message)
+		_update_debug_label()
+		return
+
+	var worker := _spawn_worker_at(spawn_tile)
+	last_message = "Recruited worker %d at %s for %s" % [
+		worker.id,
+		str(spawn_tile),
+		_get_cost_debug_text(RECRUIT_WORKER_COST),
+	]
+	print(last_message)
+	_update_debug_label()
+	queue_redraw()
 
 
 func _update_workers(delta: float) -> void:
@@ -828,6 +873,72 @@ func _get_extractor_idle_message(building_type: int) -> String:
 			return "Extractor idle: no reachable source"
 
 
+func _get_completed_barracks_tiles() -> Array[Vector2i]:
+	var barracks_tiles: Array[Vector2i] = []
+	for tile_position in buildings:
+		if int(buildings[tile_position]) == BuildingDefinitionScript.BuildingType.BARRACKS_PLACEHOLDER:
+			barracks_tiles.append(tile_position)
+
+	return barracks_tiles
+
+
+func _find_worker_recruit_spawn_tile() -> Vector2i:
+	var barracks_tiles := _get_completed_barracks_tiles()
+	if barracks_tiles.is_empty():
+		return Vector2i(-1, -1)
+
+	var spawn_pathfinder := CardinalPathfinderScript.new(dungeon)
+	spawn_pathfinder.blocked_tiles = _get_access_blocked_tiles()
+	var best_spawn_tile := Vector2i(-1, -1)
+	var best_distance: int = dungeon.size.x + dungeon.size.y + 1
+	for barracks_tile in barracks_tiles:
+		var barracks_interaction_tiles: Array[Vector2i] = spawn_pathfinder.get_cardinal_interaction_tiles(barracks_tile)
+		for y in range(dungeon.size.y):
+			for x in range(dungeon.size.x):
+				var candidate := Vector2i(x, y)
+				var distance: int = abs(candidate.x - barracks_tile.x) + abs(candidate.y - barracks_tile.y)
+				if distance >= best_distance:
+					continue
+				if not _is_valid_worker_recruit_spawn_tile(candidate):
+					continue
+				if not _can_reach_spawn_tile(spawn_pathfinder, barracks_interaction_tiles, candidate):
+					continue
+
+				best_spawn_tile = candidate
+				best_distance = distance
+
+	return best_spawn_tile
+
+
+func _is_valid_worker_recruit_spawn_tile(tile_position: Vector2i) -> bool:
+	if not dungeon.is_in_bounds(tile_position):
+		return false
+	if dungeon.is_overlord_room(tile_position):
+		return false
+	if dungeon.get_tile(tile_position) != DungeonMapScript.TileType.FLOOR:
+		return false
+	if dungeon.get_resource_node(tile_position) != DungeonMapScript.ResourceNodeType.NONE:
+		return false
+	if _has_building_at(tile_position):
+		return false
+	if _has_active_construction_task(tile_position):
+		return false
+	if _has_active_dig_task(tile_position):
+		return false
+
+	return true
+
+
+func _can_reach_spawn_tile(spawn_pathfinder: RefCounted, start_tiles: Array[Vector2i], spawn_tile: Vector2i) -> bool:
+	for start_tile in start_tiles:
+		if start_tile == spawn_tile:
+			return true
+		if not spawn_pathfinder.find_cardinal_path(start_tile, spawn_tile).is_empty():
+			return true
+
+	return false
+
+
 func _would_preserve_outside_access(proposed_blocked_tile: Vector2i) -> bool:
 	var access_validator := DungeonAccessValidatorScript.new()
 	return access_validator.is_overlord_room_connected(dungeon, _get_access_blocked_tiles(proposed_blocked_tile))
@@ -1225,6 +1336,14 @@ func _get_resource_name(resource_type: ResourceManagerScript.ResourceType) -> St
 			return "Gold"
 		_:
 			return "Unknown"
+
+
+func _get_cost_debug_text(cost: Dictionary) -> String:
+	return "%d Wood, %d Ore, %d Gold" % [
+		int(cost.get(ResourceManagerScript.ResourceType.WOOD, 0)),
+		int(cost.get(ResourceManagerScript.ResourceType.ORE, 0)),
+		int(cost.get(ResourceManagerScript.ResourceType.GOLD, 0)),
+	]
 
 
 func _update_pathfinder_blocked_tiles() -> void:

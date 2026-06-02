@@ -2,7 +2,7 @@
 
 Krebel's Keep is a 2D top-down tile-based dungeon builder/defense sim prototype.
 
-## Milestone 2F Extractor Range And Source Access
+## Milestone 2G Worker Recruitment Stub
 
 - Godot version: 4.6.3
 - Language: GDScript
@@ -15,9 +15,9 @@ Krebel's Keep is a 2D top-down tile-based dungeon builder/defense sim prototype.
 2. Import/open this project folder.
 3. Press Run Project or open and run `scenes/main/Main.tscn`.
 
-## Resource Extraction Prototype
+## Resource Extraction And Recruitment Prototype
 
-Milestone 2F keeps the worker trip prototype and lets Mine/Lumberyard extractors
+Milestone 2G keeps the worker trip prototype and lets Mine/Lumberyard extractors
 use reachable nearby permanent sources instead of requiring direct adjacency.
 Completed extractor buildings request harvest work from the shortest reachable
 matching source within a small cardinal path range. A worker travels to the
@@ -39,19 +39,25 @@ deleted, consumed, or permanently depleted.
 
 Adjacent extractor placement is still optimal because worker travel is shorter,
 but it is not mandatory. If buildings or construction block access to a matching
-source, production stalls with debug feedback until access is restored. Worker
-recruitment, worker assignment UI, and building removal are future work.
+source, production stalls with debug feedback until access is restored.
+
+Press `R` to recruit one temporary worker-capacity test Goblin Worker. Recruitment
+currently requires a completed `BarracksPlaceholder`, costs 20 Wood and 10 Ore,
+and spawns the worker on a valid reachable floor tile near the Barracks. This is
+a temporary worker-capacity stub before worker assignment UI.
+
+Worker assignment UI and building removal are future work.
 
 ## Validation
 
-Milestone 2F is valid when:
+Milestone 2G is valid when:
 
 - The project opens in Godot 4.6.3.
 - The main scene runs.
 - A fixed 128x128 dungeon grid is visible.
 - Solid rock, floor, boundary wall, entrance, and Overlord room tiles are visually distinct.
 - The entrance is near the south-center edge and connects by cardinal floor path to the north-center 5x5 Overlord room.
-- The debug label says `Krebel's Keep Milestone 2F loaded` and shows the hovered tile coordinate/type.
+- The debug label says `Krebel's Keep Milestone 2G loaded` and shows the hovered tile coordinate/type.
 - Camera movement works with WASD or arrow keys.
 - Zoom works with mouse wheel or `+` and `-`.
 - Startup output reports `Access valid: Overlord room connected to outside`.
@@ -60,8 +66,11 @@ Milestone 2F is valid when:
 - Completed Mines and Lumberyards create recurring worker harvest tasks instead of passive production.
 - Workers travel to the reachable source, gather, return to the building, and deposit +1 Wood or +1 Ore.
 - Blocking source access stalls extractor production clearly instead of producing without a route.
+- Pressing `R` before a completed `BarracksPlaceholder` exists rejects recruitment clearly.
+- Pressing `R` with a completed `BarracksPlaceholder`, enough resources, and a valid reachable spawn tile deducts 20 Wood and 10 Ore and adds a worker.
+- The debug label shows worker count, recruitment cost, and the latest recruitment result.
 - Ore and Root source tiles remain visible, open, permanent, and undepleted.
-- No general hauling, source stock accounting, doors, traps, adventurers, combat, waves, tech tree, or save/load behavior exists yet.
+- No worker assignment UI, general hauling, source stock accounting, doors, traps, adventurers, combat, waves, tech tree, or save/load behavior exists yet.
 
 Future milestones will add source output caps, fuller regeneration, and broader
 hauling/resource logistics.
